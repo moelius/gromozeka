@@ -186,10 +186,10 @@ html_show_sourcelink = False
 
 def run_apidoc(_):
     from sphinx.ext.apidoc import main
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
     cur_dir = os.path.abspath(os.path.dirname(__file__))
+    print(cur_dir)
     output_path = os.path.join(cur_dir, 'apidoc')
-    main(['-e', '-o', output_path, os.path.join('..', 'gromozeka'), '--force'])
+    main(['-o', output_path, os.path.join(cur_dir, '..', '..', 'gromozeka'), '--force'])
 
 
 def setup(app):
