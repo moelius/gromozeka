@@ -53,6 +53,6 @@ if __name__ == '__main__':
 
     connection = pika.BlockingConnection(pika.URLParameters('amqp://guest:guest@localhost:5672/%2F'))
     channel = connection.channel()
-    # You must push periodic messages to eta exchange.
+    # You must push periodic and eta tasks to eta exchange.
     channel.basic_publish(exchange='eta_exchange', routing_key='eta', body=json_message)
     connection.close()

@@ -6,8 +6,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-## [0.0.2] - 2018-02-28
+## [0.0.3] - 2018-02-28
 ### Added
+- Added some documentation
+
+## [0.0.2] - 2018-02-28
+### Changed
 - Changed setup.py
 
 ## [0.0.1] - 2018-02-28

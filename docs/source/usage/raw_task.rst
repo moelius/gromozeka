@@ -8,16 +8,18 @@ Later other serializers will be available.
     :lines: 32-
     :dedent: 4
 
-We can run periodic tasks too:
+Periodic tasks:
 
 .. literalinclude:: ../../../examples/raw_periodic_task.py
-    :lines: 35-52
+    :lines: 35-
     :dedent: 4
 
-And ETA tasks:
+ETA tasks:
 
 .. literalinclude:: ../../../examples/raw_eta_task.py
-    :lines: 35-48
+    :lines: 35-
     :dedent: 4
+
+
 
 See `primitives.protocol` for more information

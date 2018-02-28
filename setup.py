@@ -22,6 +22,7 @@ setup(
     long_description=open(join(dirname(__file__), 'README.rst')).read(),
     author=AUTHOR,
     author_email=AUTHOR_EMAIL,
+    keywords='task job queue distributed messaging pika rabbit rabbitmq pool worker',
     license="MIT",
     url=URL,
     packages=find_packages(exclude=["tests.*", "tests"]),
