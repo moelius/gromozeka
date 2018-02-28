@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.2] - 2018-02-28
+### Added
+- Changed setup.py
+
 ## [0.0.1] - 2018-02-28
 ### Added
-- Initial commit.
+- Initial commit

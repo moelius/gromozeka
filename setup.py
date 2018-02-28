@@ -1,3 +1,5 @@
+import io
+import re
 from os.path import join, dirname
 
 from pip.req import parse_requirements
@@ -9,11 +11,13 @@ DESCRIPTION = "Distributed task queue."
 AUTHOR = "Klimov Konstantin"
 AUTHOR_EMAIL = "moelius1983@gmail.com"
 URL = "https://github.com/moelius/gromozeka"
-VERSION = __import__(PACKAGE).__version__
+
+with io.open('flask/__init__.py', 'rt', encoding='utf8') as f:
+    version = re.search(r'__version__ = \'(.*?)\'', f.read()).group(1)
 
 setup(
     name=NAME,
-    version=VERSION,
+    version=version,
     description=DESCRIPTION,
     long_description=open(join(dirname(__file__), 'README.rst')).read(),
     author=AUTHOR,
