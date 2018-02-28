@@ -12,7 +12,7 @@ AUTHOR = "Klimov Konstantin"
 AUTHOR_EMAIL = "moelius1983@gmail.com"
 URL = "https://github.com/moelius/gromozeka"
 
-with io.open('flask/__init__.py', 'rt', encoding='utf8') as f:
+with io.open('gromozeka/__init__.py', 'rt', encoding='utf8') as f:
     version = re.search(r'__version__ = \'(.*?)\'', f.read()).group(1)
 
 setup(
