@@ -25,7 +25,7 @@ def get_app():
 
 
 class Gromozeka:
-    """Async task processor application
+    """
 
     Attributes:
         logger(:obj:`logging.Logger`): Class logger

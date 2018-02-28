@@ -4,38 +4,12 @@ gromozeka.concurrency package
 Submodules
 ----------
 
-gromozeka.concurrency.commands module
--------------------------------------
+.. toctree::
 
-.. automodule:: gromozeka.concurrency.commands
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-gromozeka.concurrency.pool module
----------------------------------
-
-.. automodule:: gromozeka.concurrency.pool
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-gromozeka.concurrency.scheduler module
---------------------------------------
-
-.. automodule:: gromozeka.concurrency.scheduler
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-gromozeka.concurrency.worker module
------------------------------------
-
-.. automodule:: gromozeka.concurrency.worker
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
+   gromozeka.concurrency.commands
+   gromozeka.concurrency.pool
+   gromozeka.concurrency.scheduler
+   gromozeka.concurrency.worker
 
 Module contents
 ---------------

@@ -4,14 +4,9 @@ gromozeka.app package
 Submodules
 ----------
 
-gromozeka.app.app module
-------------------------
+.. toctree::
 
-.. automodule:: gromozeka.app.app
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
+   gromozeka.app.app
 
 Module contents
 ---------------

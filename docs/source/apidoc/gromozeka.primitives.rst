@@ -4,30 +4,11 @@ gromozeka.primitives package
 Submodules
 ----------
 
-gromozeka.primitives.base module
---------------------------------
+.. toctree::
 
-.. automodule:: gromozeka.primitives.base
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-gromozeka.primitives.chain module
----------------------------------
-
-.. automodule:: gromozeka.primitives.chain
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-gromozeka.primitives.protocol module
-------------------------------------
-
-.. automodule:: gromozeka.primitives.protocol
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
+   gromozeka.primitives.base
+   gromozeka.primitives.chain
+   gromozeka.primitives.protocol
 
 Module contents
 ---------------

@@ -13,6 +13,7 @@
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
 import os
+import subprocess
 import sys
 
 import alabaster
@@ -183,3 +184,18 @@ html_use_modindex = False
 
 html_show_sourcelink = False
 
+
+def run_apidoc(_):
+    modules = ['gromozeka']
+    for module in modules:
+        cur_dir = os.path.abspath(os.path.dirname(__file__))
+        output_path = os.path.join(cur_dir, 'apidoc')
+        cmd_path = 'sphinx-apidoc'
+        if hasattr(sys, 'real_prefix'):  # Check to see if we are in a virtualenv
+            # If we are, assemble the path manually
+            cmd_path = os.path.abspath(os.path.join(sys.prefix, 'bin', 'sphinx-apidoc'))
+        subprocess.check_call([cmd_path, '-e', '-o', output_path, "../%s" % module, '--force'])
+
+
+def setup(app):
+    app.connect('builder-inited', run_apidoc)

@@ -4,14 +4,9 @@ gromozeka.brokers package
 Submodules
 ----------
 
-gromozeka.brokers.rabbit module
--------------------------------
+.. toctree::
 
-.. automodule:: gromozeka.brokers.rabbit
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
+   gromozeka.brokers.rabbit
 
 Module contents
 ---------------
