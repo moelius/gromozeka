@@ -9,6 +9,7 @@ from gromozeka.concurrency import Pool
 from gromozeka.concurrency import ThreadWorker
 from gromozeka.concurrency import commands
 from gromozeka.concurrency import scheduler
+from gromozeka.config import app_config
 from gromozeka.primitives.protocol import BrokerPointType, Request
 
 CONSUMER_ID_FORMAT = "{exchange}_{exchange_type}_{queue}_{routing_key}"
@@ -24,7 +25,6 @@ class Consumer:
         logger(:obj:`logging.Logger`): Class logger
         broker(:obj:`gromozeka.brokers.Consumer`): Broker
         exchange(:obj:`str`): Rabbitmq exchange
-        exchange_type(:obj:`str`): : Rabbitmq exchange type
         exchange_type(:obj:`str`): : Rabbitmq exchange type
         queue_(:obj:`str`): Rabbitmq queue
         routing_key(:obj:`str`): : Rabbitmq routing key
@@ -98,9 +98,7 @@ class Consumer:
         Args:
             task_id(str): Registry task identification
         """
-        from gromozeka import get_app
-        atp = get_app()
-        self.tasks[task_id] = atp.get_task(task_id)
+        self.tasks[task_id] = self.broker.app.get_task(task_id)
 
     def open_channel(self):
         """Open channel
@@ -119,10 +117,8 @@ class Consumer:
             body:
         """
         self.logger.info('Received message # %s from %s: %s', basic_deliver.delivery_tag, self.id, body)
-        from gromozeka import get_app
-        atp = get_app()
         request = Request.from_json(json_message=body, delivery_tag=basic_deliver.delivery_tag)
-        if self.queue in (atp.config.broker_retry_queue, atp.config.broker_eta_queue):
+        if self.queue in (self.broker.config.broker_retry_queue, self.broker.config.broker_eta_queue):
             if request.scheduler.every and not request.scheduler.eta:  # raw task
                 delay = scheduler.delay(last_run=request.scheduler.eta,
                                         every=request.scheduler.every,
@@ -130,13 +126,13 @@ class Consumer:
                                         at=request.scheduler.at)
             else:
                 delay = scheduler.delay_from_eta(
-                    eta=request.scheduler.countdown if self.queue == atp.config.broker_retry_queue else request.scheduler.eta)
+                    eta=request.scheduler.countdown if self.queue == self.broker.config.broker_retry_queue else request.scheduler.eta)
             if delay > 0:
-                atp.scheduler.add(
+                self.broker.app.scheduler.add(
                     wait_time=delay,
                     func=self.publish,
                     args=[request, request.broker_point.exchange, request.broker_point.routing_key],
-                    priority=1 if self.queue == atp.config.broker_retry_queue else 2)
+                    priority=1 if self.queue == self.broker.config.broker_retry_queue else 2)
             else:
                 self.publish(request, request.broker_point.exchange, request.broker_point.routing_key)
             self.acknowledge_message(basic_deliver.delivery_tag)
@@ -259,6 +255,7 @@ class Broker(Pool):
     """Broker class
 
     Attributes:
+        app(:obj:`gromozeka.Gromozeka`): Application
         logger(:obj:`logging.Logger`): Class logger
         config(gromozeka.config.Config): Config object
         `Worker`(:obj:`gromozeka.concurrency.Worker`): Parent class for `Customer`
@@ -271,37 +268,20 @@ class Broker(Pool):
 
     class Worker(ThreadWorker):
         retries = 0
+        broker = None
 
-    def __init__(self):
+    def __init__(self, app):
+        self.app = app
         self.logger = logging.getLogger("gromozeka.broker")
-        from gromozeka import get_app
-        self.config = get_app().config
+        self.config = None
+        self._url = None
         self.retries = 0
         worker = self.Worker
         worker.run = self.worker_run
-        worker.logger = self.logger
-        self._url = self.config.broker_url
+        worker.broker = self
         self._connection = None
         self._closing = False
         self._consumers = {}
-
-        # add scheduler consumer
-        self._add_consumer(
-            broker_point=BrokerPointType(
-                exchange=self.config.broker_retry_exchange,
-                exchange_type='direct',
-                queue=self.config.broker_retry_queue,
-                routing_key=self.config.broker_retry_routing_key),
-            name=SCHEDULER_CONSUMER_NAME)
-
-        # add consumer for eta tasks
-        self._add_consumer(
-            broker_point=BrokerPointType(
-                exchange=self.config.broker_eta_exchange,
-                exchange_type='direct',
-                queue=self.config.broker_eta_queue,
-                routing_key=self.config.broker_eta_routing_key),
-            name=ETA_CONSUMER_NAME)
         super().__init__(max_workers=1, worker_class=worker, logger=self.logger)
 
     def listen_cmd(self):
@@ -336,21 +316,19 @@ class Broker(Pool):
             self(gromozeka.brokers.rabbit.Broker.Worker): Parent `Worker` object
         """
         self.logger.info("start")
-        from gromozeka import get_app
-        app = get_app()
         while not self._stop_event.is_set():
             try:
-                app.broker.serve()
+                self.broker.serve()
                 self.retries = 0
             except pika.exceptions.AMQPConnectionError:
                 pass
             if self._stop_event.is_set():
                 break
-            if self.retries == app.config.broker_reconnect_max_retries:
-                app.stop()
+            if self.retries == self.broker.config.broker_reconnect_max_retries:
+                self.broker.app.stop()
                 break
             self.retries += 1
-            time.sleep(app.config.broker_reconnect_retry_countdown)
+            time.sleep(self.broker.config.broker_reconnect_retry_countdown)
             self.logger.info('Trying to reconnect')
         self.pool.out_queue.cancel_join_thread()
         self.logger.info("stop")
@@ -367,15 +345,35 @@ class Broker(Pool):
         """Start `Broker`
 
         """
-        if self._consumers:
-            self._connection = self.connect()
-            self._connection.ioloop.start()
+        self.config = app_config
+        self._url = self.config.broker_url
+
+        # add scheduler consumer
+        self._add_consumer(
+            broker_point=BrokerPointType(
+                exchange=self.config.broker_retry_exchange,
+                exchange_type='direct',
+                queue=self.config.broker_retry_queue,
+                routing_key=self.config.broker_retry_routing_key),
+            name=SCHEDULER_CONSUMER_NAME)
+
+        # add consumer for eta tasks
+        self._add_consumer(
+            broker_point=BrokerPointType(
+                exchange=self.config.broker_eta_exchange,
+                exchange_type='direct',
+                queue=self.config.broker_eta_queue,
+                routing_key=self.config.broker_eta_routing_key),
+            name=ETA_CONSUMER_NAME)
+
+        self._connection = self.connect()
+        self._connection.ioloop.start()
 
     def send_task(self, request):
         """Send request to consumer
 
         Args:
-            request(primitives.Request): `Request` object
+            request(gromozeka.primitives.Request): `Request` object
         """
         self.cmd.put(commands.broker_publish(request=request))
 
@@ -383,7 +381,7 @@ class Broker(Pool):
         """
 
         Args:
-            request(primitives.Request): `Request` object
+            request(gromozeka.primitives.Request): `Request` object
         """
         if request.scheduler:
             if request.scheduler.countdown:
@@ -399,7 +397,7 @@ class Broker(Pool):
         """Acknowledge message with specific consumer by it's tag
 
         Args:
-            broker_point(gromozeka.BrokerPointType): Broker entry
+            broker_point(gromozeka.primitives.BrokerPointType): Broker entry
             delivery_tag(int): Original message delivery tag
         """
         self.cmd.put(commands.broker_ack(broker_point=broker_point, delivery_tag=delivery_tag))
@@ -413,7 +411,7 @@ class Broker(Pool):
         """Reject message with specific consumer by it's tag
 
         Args:
-            broker_point(gromozeka.BrokerPointType): Broker entry
+            broker_point(gromozeka.primitives.BrokerPointType): Broker entry
             delivery_tag(int): Original message delivery tag
         """
         self.cmd.put(commands.broker_reject(broker_point=broker_point, delivery_tag=delivery_tag))
@@ -424,11 +422,9 @@ class Broker(Pool):
         consumer.reject_message(delivery_tag=delivery_tag)
 
     def on_pool_size_change(self):
-        from gromozeka import get_app
-        atp = get_app()
         for cname, consumer in self._consumers.items():
             new_prefetch_count = 0
-            for tname, task in atp.registry.items():
+            for tname, task in self.app.registry.items():
                 if Consumer.format_consumer_id_from_broker_point(task.broker_point) == cname:
                     new_prefetch_count += len(task.pool.workers)
             if consumer.prefetch_count != new_prefetch_count:
@@ -468,7 +464,7 @@ class Broker(Pool):
         """Add new `Consumer` to `Broker`
 
         Args:
-            broker_point(primitives.BrokerPointType): broker entry
+            broker_point(gromozeka.primitives.BrokerPointType): broker entry
             task_id(str): task identification
         """
         self.cmd.put(commands.broker_add_consumer(task_id=task_id, broker_point=broker_point))
@@ -477,7 +473,7 @@ class Broker(Pool):
         """
 
         Args:
-            broker_point(primitives.BrokerPointType): Broker entry
+            broker_point(gromozeka.primitives.BrokerPointType): Broker entry
             task_id(str): Task identification
             name(str): Consumer name
         """

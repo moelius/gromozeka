@@ -4,7 +4,7 @@ import sys
 
 from gromozeka.brokers import Broker
 from gromozeka.concurrency import Scheduler
-from gromozeka.config import Config
+from gromozeka.config import app_config
 from gromozeka.exceptions import GromozekaException
 from gromozeka.primitives import RegistryTask
 
@@ -33,7 +33,6 @@ class Gromozeka:
         scheduler(:obj:`gromozeka.concurrency.Scheduler`): Scheduler
         registry(:obj:`dict` of :obj:`gromozeka.primitives.Task`): Task registry
         config(:obj:`gromozeka.config.Config`): config object
-
     """
 
     __slots__ = ['logger', 'broker', 'scheduler', 'registry', 'config']
@@ -41,15 +40,11 @@ class Gromozeka:
     def __init__(self):
         global atp
         atp = self
-        self.config = Config()
+        self.config = app_config
         self.logger = logging.getLogger('gromozeka')
-        self.broker = Broker()
+        self.broker = Broker(self)
         self.scheduler = Scheduler()
         self.registry = {}
-
-        # setup signal handler
-        for sig in ('SIGTERM', 'SIGINT'):
-            signal.signal(getattr(signal, sig), self.signal_handler)
 
     def config_from_env(self):
         """Configure Gromozeka with environment variables
@@ -63,8 +58,6 @@ class Gromozeka:
             gromozeka.Gromozeka: Configured application
         """
         self.config.from_env()
-        self.scheduler = Scheduler()
-        self.broker = Broker()
         return self
 
     def config_from_dict(self, conf):
@@ -83,16 +76,18 @@ class Gromozeka:
             gromozeka.Gromozeka: Configured application
         """
         self.config.from_dict(conf)
-        self.scheduler = Scheduler()
-        self.broker = Broker()
         return self
 
     def start(self):
         """Start application
 
         """
-        self.scheduler.start()
+        # setup signal handler
+        for sig in ('SIGTERM', 'SIGINT'):
+            signal.signal(getattr(signal, sig), self._signal_handler)
+
         self.broker.start()
+        self.scheduler.start()
         for name, task in self.registry.items():
             task.pool.start()
 
@@ -138,7 +133,7 @@ class Gromozeka:
         except KeyError:
             raise GromozekaException('task `{}` not registered in ATP registry'.format(id_))
 
-    def signal_handler(self, _, __):
+    def _signal_handler(self, _, __):
         """Signal handler
 
         """
