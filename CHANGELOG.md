@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.5] - 2018-03-01
+### Changed
+- Broker configuration
+
 ## [0.0.4] - 2018-02-28
 ### Added
 - Added MANIFEST.in

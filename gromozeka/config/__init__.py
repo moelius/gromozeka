@@ -107,4 +107,6 @@ class Config:
             setattr(self, name, type_(attr))
 
 
-__all__ = ['Config']
+app_config = Config()
+
+__all__ = [app_config]
