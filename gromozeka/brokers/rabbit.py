@@ -1,84 +1,228 @@
 import logging
-import queue
 import time
 
 import pika
-from pika.exceptions import ChannelClosed
+import pika.exceptions
 
-from gromozeka.concurrency import Pool
-from gromozeka.concurrency import ThreadWorker
-from gromozeka.concurrency import commands
+from gromozeka.brokers.base import BrokerInterface
 from gromozeka.concurrency import scheduler
-from gromozeka.config import app_config
-from gromozeka.primitives.protocol import BrokerPointType, Request
-
-CONSUMER_ID_FORMAT = "{exchange}_{exchange_type}_{queue}_{routing_key}"
-SCHEDULER_CONSUMER_NAME = 'scheduler'
-ETA_CONSUMER_NAME = 'eta'
+from gromozeka.primitives import Request
+from gromozeka.primitives.protocol import BrokerPointType
 
 
-# TODO extract to universal (BaseConsumer) - this is replacement solution
+class RabbitMQPikaAdaptee(BrokerInterface):
+    _consumer_id_format = "{exchange}_{exchange_type}_{queue}_{routing_key}"
+    _retry_consumer_name = 'scheduler'
+    _eta_consumer_name = 'eta'
+
+    def __init__(self, app):
+        self.reconnect_max_retries = None
+        self.reconnect_retry_countdown = None
+        self._connection = None
+        self._closing = False
+        self._consumers = {}
+        self._url = None
+        self._retry_exchange = None
+        self._retry_queue = None
+        self._retry_routing_key = None
+        self._eta_exchange = None
+        self._eta_queue = None
+        self._eta_routing_key = None
+        super().__init__(app=app)
+
+    def configure(self):
+        self._url = self.app.config.broker_url
+        self.reconnect_max_retries = self.app.config.broker_reconnect_max_retries
+        self.reconnect_retry_countdown = self.app.config.broker_reconnect_retry_countdown
+        self._retry_exchange = self.app.config.broker_retry_exchange
+        self._retry_queue = self.app.config.broker_retry_queue
+        self._retry_routing_key = self.app.config.broker_retry_routing_key
+        self._eta_exchange = self.app.config.broker_eta_exchange
+        self._eta_queue = self.app.config.broker_eta_queue
+        self._eta_routing_key = self.app.config.broker_eta_routing_key
+
+    @staticmethod
+    def worker_run(self):
+        self.logger.info('start')
+        reconnect_retries = 0
+        self.broker.add_internal_consumers()
+        while not self._stop_event.is_set():
+            try:
+                self.broker.serve()
+                reconnect_retries = 0
+            except pika.exceptions.AMQPConnectionError:
+                pass
+            if self._stop_event.is_set():
+                break
+            if reconnect_retries == self.broker.reconnect_max_retries:
+                self.app.stop()
+                break
+            reconnect_retries += 1
+            time.sleep(self.broker.reconnect_retry_countdown)
+            self.logger.info('Trying to reconnect')
+        self.logger.info('stop')
+
+    def stop(self):
+        self._closing = True
+        self._connection.close()
+
+    def add_internal_consumers(self):
+        consumer = Consumer(
+            broker=self,
+            id_=self._retry_consumer_name,
+            connection=self._connection,
+            exchange=self._retry_exchange,
+            exchange_type='direct',
+            queue_=self._retry_queue,
+            routing_key=self._retry_routing_key)
+        self._consumers[self._retry_consumer_name] = consumer
+
+        consumer = Consumer(
+            broker=self,
+            id_=self._eta_consumer_name,
+            connection=self._connection,
+            exchange=self._eta_exchange,
+            exchange_type='direct',
+            queue_=self._eta_queue,
+            routing_key=self._eta_routing_key)
+        self._consumers[self._eta_consumer_name] = consumer
+
+    def serve(self):
+        """Start `Broker`
+
+        """
+        self._connection = self._connect()
+        self._connection.ioloop.start()
+
+    def task_register(self, broker_point, task_id):
+        """
+
+        Args:
+            broker_point(gromozeka.primitives.BrokerPointType): Broker entry
+            task_id(str): Task identification
+        """
+        consumer_id = self._consumer_id_format.format(
+            exchange=broker_point.exchange,
+            exchange_type=broker_point.exchange_type,
+            queue=broker_point.queue,
+            routing_key=broker_point.routing_key)
+        consumer = Consumer(
+            broker=self, id_=consumer_id,
+            connection=self._connection,
+            exchange=broker_point.exchange,
+            exchange_type=broker_point.exchange_type,
+            queue_=broker_point.queue,
+            routing_key=broker_point.routing_key)
+
+        consumer.add_task(task_id)
+        self._consumers[consumer_id] = consumer
+
+    def task_send(self, request):
+        if request.scheduler:
+            consumer_id = self._retry_consumer_name if request.scheduler.countdown else self._eta_consumer_name
+        else:
+            consumer_id = self._consumer_id_format.format(
+                exchange=request.broker_point.exchange,
+                exchange_type=request.broker_point.exchange_type,
+                queue=request.broker_point.queue,
+                routing_key=request.broker_point.routing_key)
+        self._consumers[consumer_id].publish(request=request)
+
+    def task_done(self, broker_point, delivery_tag):
+        consumer_id = self._consumer_id_format.format(
+            exchange=broker_point.exchange,
+            exchange_type=broker_point.exchange_type,
+            queue=broker_point.queue,
+            routing_key=broker_point.routing_key)
+        self._consumers[consumer_id].acknowledge_message(delivery_tag=delivery_tag)
+
+    def task_reject(self, broker_point, delivery_tag):
+        consumer_id = self._consumer_id_format.format(
+            exchange=broker_point.exchange,
+            exchange_type=broker_point.exchange_type,
+            queue=broker_point.queue,
+            routing_key=broker_point.routing_key)
+        self._consumers[consumer_id].reject_message(delivery_tag=delivery_tag)
+
+    def on_pool_size_changed(self):
+        for cname, consumer in self._consumers.items():
+            new_prefetch_count = 0
+            for tname, task in self.app.registry.items():
+                consumer_id = self._consumer_id_format.format(
+                    exchange=task.broker_point.exchange,
+                    exchange_type=task.broker_point.exchange_type,
+                    queue=task.broker_point.queue,
+                    routing_key=task.broker_point.routing_key)
+                if consumer_id == cname:
+                    new_prefetch_count += len(task.pool.workers)
+            if consumer.prefetch_count != new_prefetch_count:
+                self.logger.info('prefetch count changed from %s to %s' % (consumer.prefetch_count, new_prefetch_count))
+                try:
+                    consumer.change_prefetch_count(new_prefetch_count)
+                except pika.exceptions.ChannelClosed:
+                    consumer.open_channel()
+                    consumer.change_prefetch_count(new_prefetch_count)
+                if consumer.prefetch_count == 0:
+                    consumer.stop_consuming()
+
+    def _connect(self):
+        """Connect to Rabbitmq
+
+        Returns:
+            pika.SelectConnection:
+        """
+        self.logger.debug('Connecting to %s', self._url)
+        return pika.SelectConnection(pika.URLParameters(self._url), self._on_connection_open, stop_ioloop_on_close=True)
+
+    def _on_connection_open(self, _):
+        self.logger.debug('Connection opened')
+        self._add_on_connection_close_callback()
+        for name, consumer in self._consumers.items():
+            consumer._connection = self._connection
+            consumer.open_channel()
+
+    def _add_on_connection_close_callback(self):
+        self.logger.debug('Adding connection close callback')
+        self._connection.add_on_close_callback(self._on_connection_closed)
+
+    def _on_connection_closed(self, _, reply_code, reply_text):
+        if self._closing:
+            self._connection.ioloop.stop()
+
+    def _reconnect(self):
+        # This is the old connection IOLoop instance, stop its ioloop
+        self._connection.ioloop.stop()
+
+        if not self._closing:
+            # Create a new connection
+            self._connection = self._connect()
+
+            # There is now a new connection, needs a new ioloop to run
+            self._connection.ioloop.start()
+
+    def _close_connection(self):
+        """This method closes the connection to RabbitMQ.
+
+        """
+        self.logger.debug('Closing connection')
+        self._connection.close()
+
+
 class Consumer:
-    """Channel consumer
-
-    Attributes:
-        logger(:obj:`logging.Logger`): Class logger
-        broker(:obj:`gromozeka.brokers.Consumer`): Broker
-        exchange(:obj:`str`): Rabbitmq exchange
-        exchange_type(:obj:`str`): : Rabbitmq exchange type
-        queue_(:obj:`str`): Rabbitmq queue
-        routing_key(:obj:`str`): : Rabbitmq routing key
-        id(:obj:`str`): Consumer identification
-        tasks(:obj:`dict` of :obj:`gromozeka.primitives.RegistryTask`): Consumer tasks
-        prefetch_count(:obj:`int`): prefetch_count size
-        _connection(:obj:`pika.SelectConnection`): pika connection
-        _channel: Channel
-        _closing(:obj:`bool`): Consumer state
-        _consumer_tag(:obj:`int`): Consumer tag
-
-    Args:
-        broker(gromozeka.brokers.Broker): Broker
-        connection(pika.SelectConnection): pika connection
-        exchange(str): Rabbitmq exchange
-        exchange_type(str): : Rabbitmq exchange type
-        queue_(str): : Rabbitmq queue
-        routing_key(str): : Rabbitmq routing key
-    """
-
-    def __init__(self, broker, connection, exchange, exchange_type, queue_, routing_key):
-        self.broker = broker
+    def __init__(self, broker, id_, connection, exchange, exchange_type, queue_, routing_key):
         self.logger = logging.getLogger('gromozeka.broker.consumer')
+        self.broker = broker
         self.prefetch_count = 0
         self.exchange = exchange
         self.exchange_type = exchange_type
         self.queue = queue_
         self.routing_key = routing_key
-        self.id = CONSUMER_ID_FORMAT.format(
-            exchange=self.exchange,
-            exchange_type=self.exchange_type,
-            queue=self.queue,
-            routing_key=self.routing_key)
+        self.id = id_
         self._channel = None
         self._connection = connection
         self._closing = False
         self._consumer_tag = None
         self.tasks = {}
-
-    @staticmethod
-    def format_consumer_id_from_broker_point(broker_point):
-        """Format consumer id from `primitives.BrokerPointType`
-
-        Args:
-            broker_point(gromozeka.BrokerPointType): Broker entry
-
-        Returns:
-            str: consumer identification
-        """
-        return CONSUMER_ID_FORMAT.format(
-            exchange=broker_point.exchange,
-            exchange_type=broker_point.exchange_type,
-            queue=broker_point.queue,
-            routing_key=broker_point.routing_key)
 
     def get_broker_point(self):
         """Get broker point
@@ -118,7 +262,7 @@ class Consumer:
         """
         self.logger.info('Received message # %s from %s: %s', basic_deliver.delivery_tag, self.id, body)
         request = Request.from_json(json_message=body, delivery_tag=basic_deliver.delivery_tag)
-        if self.queue in (self.broker.config.broker_retry_queue, self.broker.config.broker_eta_queue):
+        if self.queue in (self.broker._retry_queue, self.broker._eta_queue):
             if request.scheduler.every and not request.scheduler.eta:  # raw task
                 delay = scheduler.delay(last_run=request.scheduler.eta,
                                         every=request.scheduler.every,
@@ -126,13 +270,13 @@ class Consumer:
                                         at=request.scheduler.at)
             else:
                 delay = scheduler.delay_from_eta(
-                    eta=request.scheduler.countdown if self.queue == self.broker.config.broker_retry_queue else request.scheduler.eta)
+                    eta=request.scheduler.countdown if self.queue == self.broker._retry_queue else request.scheduler.eta)
             if delay > 0:
                 self.broker.app.scheduler.add(
                     wait_time=delay,
                     func=self.publish,
                     args=[request, request.broker_point.exchange, request.broker_point.routing_key],
-                    priority=1 if self.queue == self.broker.config.broker_retry_queue else 2)
+                    priority=1 if self.queue == self.broker._retry_queue else 2)
             else:
                 self.publish(request, request.broker_point.exchange, request.broker_point.routing_key)
             self.acknowledge_message(basic_deliver.delivery_tag)
@@ -248,296 +392,3 @@ class Consumer:
     def _close_channel(self):
         self.logger.debug('Closing the channel')
         self._channel.close()
-
-
-# TODO extract to universal (BaseBroker) - this is replacement solution
-class Broker(Pool):
-    """Broker class
-
-    Attributes:
-        app(:obj:`gromozeka.Gromozeka`): Application
-        logger(:obj:`logging.Logger`): Class logger
-        config(gromozeka.config.Config): Config object
-        `Worker`(:obj:`gromozeka.concurrency.Worker`): Parent class for `Customer`
-        _url(:obj:`str`): Rabbitmq url
-        _connection(:obj:`pika.SelectConnection`): pika connection
-        _closing(:obj:`bool`): Broker state
-        _consumers(:obj:`list` of :obj:`Consumer`): consumers
-
-    """
-
-    class Worker(ThreadWorker):
-        retries = 0
-        broker = None
-
-    def __init__(self, app):
-        self.app = app
-        self.logger = logging.getLogger("gromozeka.broker")
-        self.config = None
-        self._url = None
-        self.retries = 0
-        worker = self.Worker
-        worker.run = self.worker_run
-        worker.broker = self
-        self._connection = None
-        self._closing = False
-        self._consumers = {}
-        super().__init__(max_workers=1, worker_class=worker, logger=self.logger)
-
-    def listen_cmd(self):
-        """Listen to commands
-
-        """
-        while not self._stop_event.is_set():
-            try:
-                command, args = self.cmd_in_queue.get(True, 0.05)
-            except queue.Empty:
-                continue
-            if command == commands.POOL_GROW:
-                self._grow(args)
-            elif command == commands.POOL_STOP:
-                self.stop_()
-            elif command == commands.BROKER_ADD_CONSUMER:
-                self._add_consumer(task_id=args['task_id'], broker_point=args['broker_point'])
-            elif command == commands.BROKER_PUBLISH:
-                self._send_task(args)
-            elif command == commands.BROKER_ACK:
-                self._ack(broker_point=args['broker_point'], delivery_tag=args['delivery_tag'])
-            elif command == commands.BROKER_REJECT:
-                self._reject(broker_point=args['broker_point'], delivery_tag=args['delivery_tag'])
-            elif command == commands.BROKER_PREFETCH_COUNT:
-                self._prefetch_count(args['broker_point'], new_size=args['new_size'])
-
-    @staticmethod
-    def worker_run(self):
-        """Overrides `Worker` method
-
-        Args:
-            self(gromozeka.brokers.rabbit.Broker.Worker): Parent `Worker` object
-        """
-        self.logger.info("start")
-        while not self._stop_event.is_set():
-            try:
-                self.broker.serve()
-                self.retries = 0
-            except pika.exceptions.AMQPConnectionError:
-                pass
-            if self._stop_event.is_set():
-                break
-            if self.retries == self.broker.config.broker_reconnect_max_retries:
-                self.broker.app.stop()
-                break
-            self.retries += 1
-            time.sleep(self.broker.config.broker_reconnect_retry_countdown)
-            self.logger.info('Trying to reconnect')
-        self.pool.out_queue.cancel_join_thread()
-        self.logger.info("stop")
-
-    def run(self):
-        """Run `Broker` in thread or process
-
-        """
-        self.logger.info("start")
-        self.grow(self.init_max_workers)
-        self.listen_cmd()
-
-    def serve(self):
-        """Start `Broker`
-
-        """
-        self.config = app_config
-        self._url = self.config.broker_url
-
-        # add scheduler consumer
-        self._add_consumer(
-            broker_point=BrokerPointType(
-                exchange=self.config.broker_retry_exchange,
-                exchange_type='direct',
-                queue=self.config.broker_retry_queue,
-                routing_key=self.config.broker_retry_routing_key),
-            name=SCHEDULER_CONSUMER_NAME)
-
-        # add consumer for eta tasks
-        self._add_consumer(
-            broker_point=BrokerPointType(
-                exchange=self.config.broker_eta_exchange,
-                exchange_type='direct',
-                queue=self.config.broker_eta_queue,
-                routing_key=self.config.broker_eta_routing_key),
-            name=ETA_CONSUMER_NAME)
-
-        self._connection = self.connect()
-        self._connection.ioloop.start()
-
-    def send_task(self, request):
-        """Send request to consumer
-
-        Args:
-            request(gromozeka.primitives.Request): `Request` object
-        """
-        self.cmd.put(commands.broker_publish(request=request))
-
-    def _send_task(self, request):
-        """
-
-        Args:
-            request(gromozeka.primitives.Request): `Request` object
-        """
-        if request.scheduler:
-            if request.scheduler.countdown:
-                consumer_id = SCHEDULER_CONSUMER_NAME
-            else:
-                consumer_id = ETA_CONSUMER_NAME
-        else:
-            consumer_id = Consumer.format_consumer_id_from_broker_point(request.broker_point)
-
-        self._consumers[consumer_id].publish(request=request)
-
-    def ack(self, broker_point, delivery_tag):
-        """Acknowledge message with specific consumer by it's tag
-
-        Args:
-            broker_point(gromozeka.primitives.BrokerPointType): Broker entry
-            delivery_tag(int): Original message delivery tag
-        """
-        self.cmd.put(commands.broker_ack(broker_point=broker_point, delivery_tag=delivery_tag))
-
-    def _ack(self, broker_point, delivery_tag):
-        consumer_id = Consumer.format_consumer_id_from_broker_point(broker_point=broker_point)
-        consumer = self.get_consumer(consumer_id=consumer_id)
-        consumer.acknowledge_message(delivery_tag=delivery_tag)
-
-    def reject(self, broker_point, delivery_tag):
-        """Reject message with specific consumer by it's tag
-
-        Args:
-            broker_point(gromozeka.primitives.BrokerPointType): Broker entry
-            delivery_tag(int): Original message delivery tag
-        """
-        self.cmd.put(commands.broker_reject(broker_point=broker_point, delivery_tag=delivery_tag))
-
-    def _reject(self, broker_point, delivery_tag):
-        consumer_id = Consumer.format_consumer_id_from_broker_point(broker_point=broker_point)
-        consumer = self.get_consumer(consumer_id=consumer_id)
-        consumer.reject_message(delivery_tag=delivery_tag)
-
-    def on_pool_size_change(self):
-        for cname, consumer in self._consumers.items():
-            new_prefetch_count = 0
-            for tname, task in self.app.registry.items():
-                if Consumer.format_consumer_id_from_broker_point(task.broker_point) == cname:
-                    new_prefetch_count += len(task.pool.workers)
-            if consumer.prefetch_count != new_prefetch_count:
-                self.logger.info('prefetch count changed from %s to %s' % (consumer.prefetch_count, new_prefetch_count))
-                try:
-                    consumer.change_prefetch_count(new_prefetch_count)
-                except ChannelClosed:
-                    consumer.open_channel()
-                    consumer.change_prefetch_count(new_prefetch_count)
-                if consumer.prefetch_count == 0:
-                    consumer.stop_consuming()
-
-    def prefetch_count(self, broker_point, new_size):
-        self.cmd.put(commands.broker_prefetch_count(broker_point=broker_point, new_size=new_size))
-
-    def _prefetch_count(self, broker_point, new_size):
-        consumer = self.get_consumer(consumer_id=Consumer.format_consumer_id_from_broker_point(broker_point))
-        consumer.change_prefetch_count(new_size)
-
-    def get_consumer(self, consumer_id):
-        """Get consumer by it's id
-
-        Args:
-            consumer_id(str): consumer identification
-
-        Returns:
-            gromozeka.brokers.Consumer:
-        """
-        return self._consumers[consumer_id]
-
-    def stop_(self):
-        self._closing = True
-        self._connection.close()
-        super().stop_()
-
-    def add_consumer(self, broker_point, task_id=None):
-        """Add new `Consumer` to `Broker`
-
-        Args:
-            broker_point(gromozeka.primitives.BrokerPointType): broker entry
-            task_id(str): task identification
-        """
-        self.cmd.put(commands.broker_add_consumer(task_id=task_id, broker_point=broker_point))
-
-    def _add_consumer(self, broker_point, task_id=None, name=None):
-        """
-
-        Args:
-            broker_point(gromozeka.primitives.BrokerPointType): Broker entry
-            task_id(str): Task identification
-            name(str): Consumer name
-        """
-        if name:
-            consumer_id = name
-        else:
-            consumer_id = CONSUMER_ID_FORMAT.format(
-                exchange=broker_point.exchange,
-                exchange_type=broker_point.exchange_type,
-                queue=broker_point.queue,
-                routing_key=broker_point.routing_key)
-        try:
-            consumer = self._consumers[consumer_id]
-        except KeyError:
-            consumer = Consumer(
-                broker=self,
-                connection=self._connection,
-                exchange=broker_point.exchange,
-                exchange_type=broker_point.exchange_type,
-                queue_=broker_point.queue,
-                routing_key=broker_point.routing_key)
-
-        if task_id:
-            consumer.add_task(task_id)
-        self._consumers[consumer_id] = consumer
-
-    def connect(self):
-        """Connect to Rabbitmq
-
-        Returns:
-            pika.SelectConnection:
-        """
-        self.logger.debug('Connecting to %s', self._url)
-        return pika.SelectConnection(pika.URLParameters(self._url), self._on_connection_open, stop_ioloop_on_close=True)
-
-    def _on_connection_open(self, _):
-        self.logger.debug('Connection opened')
-        self._add_on_connection_close_callback()
-        for name, consumer in self._consumers.items():
-            consumer._connection = self._connection
-            consumer.open_channel()
-
-    def _add_on_connection_close_callback(self):
-        self.logger.debug('Adding connection close callback')
-        self._connection.add_on_close_callback(self._on_connection_closed)
-
-    def _on_connection_closed(self, _, reply_code, reply_text):
-        if self._closing:
-            self._connection.ioloop.stop()
-
-    def _reconnect(self):
-        # This is the old connection IOLoop instance, stop its ioloop
-        self._connection.ioloop.stop()
-
-        if not self._closing:
-            # Create a new connection
-            self._connection = self.connect()
-
-            # There is now a new connection, needs a new ioloop to run
-            self._connection.ioloop.start()
-
-    def _close_connection(self):
-        """This method closes the connection to RabbitMQ.
-
-        """
-        self.logger.debug('Closing connection')
-        self._connection.close()

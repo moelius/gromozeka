@@ -1,7 +1,7 @@
 import json
 from typing import NamedTuple
 
-import gromozeka.brokers.rabbit
+import gromozeka
 
 
 class TaskType(NamedTuple):
@@ -27,7 +27,6 @@ class BrokerPointType(NamedTuple):
     routing_key: str
 
 
-# TODO eta,every,interval for periodic tasks - not ready yet (
 class SchedulerType(NamedTuple):
     """Helper class
 

@@ -119,7 +119,7 @@ class Pool(threading.Thread):
         self._wait_for_start(starting_workers)
         self.in_queue._maxsize = len(self.workers)
         from gromozeka import get_app
-        get_app().broker.on_pool_size_change()
+        get_app().broker.on_pool_size_changed()
 
     def shrink(self, n):
         """Shrink pool by `n` number of workers
@@ -141,7 +141,7 @@ class Pool(threading.Thread):
         if self.is_on_stop:
             return
         from gromozeka import get_app
-        get_app().broker.on_pool_size_change()
+        get_app().broker.on_pool_size_changed()
 
     def size(self):
         """Get pool size
@@ -167,7 +167,7 @@ class Pool(threading.Thread):
         del self.workers[worker_ident]
         self.in_queue._maxsize = len(self.workers)
         from gromozeka import get_app
-        get_app().broker.on_pool_size_change()
+        get_app().broker.on_pool_size_changed()
 
     def _wait_for_stop(self, workers):
         """Wait until workers stop

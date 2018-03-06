@@ -2,13 +2,11 @@ import logging
 import signal
 import sys
 
-from gromozeka.brokers import Broker
+from gromozeka.brokers import BrokerAdapter
 from gromozeka.concurrency import Scheduler
-from gromozeka.config import app_config
+from gromozeka.config import Config
 from gromozeka.exceptions import GromozekaException
 from gromozeka.primitives import RegistryTask
-
-DEFAULT_LOGGER_FORMAT = '%(asctime)-15s %(levelname)s %(name)s %(threadName)s %(processName)s %(message)s'
 
 
 def get_app():
@@ -18,9 +16,9 @@ def get_app():
          gromozeka.app.Gromozeka:
     """
     try:
-        return atp
+        return app
     except NameError:
-        logging.getLogger("ATP").error('async task processor (ATP) not initialized')
+        logging.getLogger("gromozeka").error("Gromozeka's  application not initialized")
         sys.exit(1)
 
 
@@ -29,22 +27,34 @@ class Gromozeka:
 
     Attributes:
         logger(:obj:`logging.Logger`): Class logger
-        broker(:obj:`gromozeka.brokers.Broker`): Broker
-        scheduler(:obj:`gromozeka.concurrency.Scheduler`): Scheduler
         registry(:obj:`dict` of :obj:`gromozeka.primitives.Task`): Task registry
         config(:obj:`gromozeka.config.Config`): config object
+        _broker(:obj:`gromozeka.brokers.Broker`): Broker
+        _scheduler(:obj:`gromozeka.concurrency.Scheduler`): Scheduler
     """
 
-    __slots__ = ['logger', 'broker', 'scheduler', 'registry', 'config']
+    __slots__ = ['logger', '_broker', '_scheduler', 'registry', 'config']
 
     def __init__(self):
-        global atp
-        atp = self
-        self.config = app_config
+        global app
+        app = self
+        self.config = Config()
         self.logger = logging.getLogger('gromozeka')
-        self.broker = Broker(self)
-        self.scheduler = Scheduler()
+        self._broker = None
+        self._scheduler = None
         self.registry = {}
+
+    @property
+    def broker(self):
+        if not self._broker:
+            self._broker = BrokerAdapter(app=self)
+        return self._broker
+
+    @property
+    def scheduler(self):
+        if not self._scheduler:
+            self._scheduler = Scheduler()
+        return self._scheduler
 
     def config_from_env(self):
         """Configure Gromozeka with environment variables
@@ -91,17 +101,6 @@ class Gromozeka:
         for name, task in self.registry.items():
             task.pool.start()
 
-    def get_consumer(self, id_):
-        """Get task consumer by task_id
-
-        Args:
-            id_(str): Unique task identification
-
-        Returns:
-             gromozeka.brokers.Consumer:
-        """
-        return self.broker.get_consumer(id_)
-
     def register_task(self, task, broker_point, worker_class=None, max_workers=1, max_retries=0, retry_countdown=0):
         """
 
@@ -131,7 +130,7 @@ class Gromozeka:
         try:
             return self.registry[id_]
         except KeyError:
-            raise GromozekaException('task `{}` not registered in ATP registry'.format(id_))
+            raise GromozekaException('task `{}` not registered in registry'.format(id_))
 
     def _signal_handler(self, _, __):
         """Signal handler
