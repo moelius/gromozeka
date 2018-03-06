@@ -51,7 +51,6 @@ class BrokerAdapter(Pool):
         self.logger = logging.getLogger("gromozeka.broker")
         self.app = app
         self.broker = self.get_broker_factory()
-        self.broker.configure()
         self.worker = type('BrokerWorker', (ThreadWorker,),
                            {'app': self.app, 'broker': self.broker, 'run': self.broker.worker_run,
                             'logger': self.logger})
