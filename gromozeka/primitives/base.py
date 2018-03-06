@@ -32,15 +32,15 @@ def task(bind=False, max_retries=0, retry_countdown=1, eta=None, every=None, int
             def hello_world():
                 print('hello world')
 
-            app=ATP()
+            app=Gromozeka()
 
             app.register_task(
                 hello_world(),
                 broker_point=BrokerPointType(
-                    exchange="telegram",
+                    exchange="first_exchange",
                     exchange_type='direct',
-                    queue='fib',
-                    routing_key='fib'))
+                    queue='first_queue',
+                    routing_key='first'))
 
             app.start()
 
@@ -52,14 +52,14 @@ def task(bind=False, max_retries=0, retry_countdown=1, eta=None, every=None, int
             def hello_world():
                 print('hello world')
 
-            app=ATP()
+            app=Gromozeka()
 
             hello_world().register(
                 broker_point=BrokerPointType(
-                    exchange="hello",
+                    exchange="first_exchange",
                     exchange_type='direct',
-                    queue='hello',
-                    routing_key='hello'))
+                    queue='first_queue',
+                    routing_key='first'))
 
             app.start()
 
@@ -189,7 +189,7 @@ class Task:
         self._at = at
 
     def register(self, broker_point, worker_class=None, max_workers=1, max_retries=0, retry_countdown=0):
-        """Register task in ATP task registry
+        """Register task in task registry
 
         Args:
             broker_point(gromozeka.primitives.BrokerPointType): Broker entry
@@ -206,9 +206,9 @@ class Task:
                               max_workers=max_workers, max_retries=max_retries or self.max_retries,
                               retry_countdown=retry_countdown or self.retry_countdown or 1,
                               broker_point=broker_point or self.broker_point)
-        atp = gromozeka.get_app()
-        atp.register_task(task=r_task, broker_point=self.broker_point)
-        atp.broker.add_consumer(task_id=self.id, broker_point=broker_point)
+        app = gromozeka.get_app()
+        app.register_task(task=r_task, broker_point=self.broker_point)
+        app.broker.task_register(task_id=self.id, broker_point=broker_point)
         return self
 
     def __call__(self, *args, **kwargs):
@@ -259,8 +259,8 @@ class Task:
         Returns:
             gromozeka.primitives.Task:
         """
-        atp = gromozeka.get_app()
-        r_task = atp.get_task(request.task.id)
+        app = gromozeka.get_app()
+        r_task = app.get_task(request.task.id)
         return cls(func=r_task.func,
                    args=request.task.args,
                    kwargs=request.task.kwargs,
@@ -298,12 +298,12 @@ class Task:
             delay = gromozeka.concurrency.scheduler.delay(last_run=self._eta, every=self._every,
                                                           interval=self._interval, at=self._at)
             self._eta = gromozeka.concurrency.scheduler.new_eta(delay)
-        atp = gromozeka.get_app()
-        r_task = atp.get_task(self.id)
+        app = gromozeka.get_app()
+        r_task = app.get_task(self.id)
         self.broker_point = r_task.broker_point
         self.args = args or self.args
         self.kwargs = kwargs or self.kwargs
-        atp.broker.send_task(request=self.request)
+        app.broker.task_send(request=self.request)
 
     def eta(self, datetime):
         """
@@ -447,14 +447,14 @@ class Task:
         self.logger.warning("retry on error: {0}".format(e))
         self.countdown = gromozeka.concurrency.scheduler.new_eta(seconds=e.retry_countdown)
         self.retries += 1
-        atp = gromozeka.get_app()
-        atp.broker.send_task(request=self.request)
+        app = gromozeka.get_app()
+        app.broker.task_send(request=self.request)
         self._reject()
 
     def _ack(self):
-        atp = gromozeka.get_app()
-        atp.broker.ack(broker_point=self.broker_point, delivery_tag=self.delivery_tag)
+        app = gromozeka.get_app()
+        app.broker.task_done(broker_point=self.broker_point, delivery_tag=self.delivery_tag)
 
     def _reject(self):
-        atp = gromozeka.get_app()
-        atp.broker.reject(broker_point=self.broker_point, delivery_tag=self.delivery_tag)
+        app = gromozeka.get_app()
+        app.broker.task_reject(broker_point=self.broker_point, delivery_tag=self.delivery_tag)

@@ -9,7 +9,7 @@ class Command(NamedTuple):
     """Helper class to make commands
 
     """
-    # command number. Find it in `async_task_processor.primitives.commands`
+    # command number. Find it in `gromozeka.primitives.commands`
     command: int
     # command arguments
     args: Any
@@ -21,11 +21,11 @@ POOL_GROW = 3
 POOL_SHRINK = 4
 POOL_SIZE = 5
 POOL_REMOVE_WORKER = 6
-BROKER_ADD_CONSUMER = 7
-BROKER_PUBLISH = 8
-BROKER_ACK = 9
-BROKER_REJECT = 10
-BROKER_PREFETCH_COUNT = 11
+BROKER_TASK_REGISTER = 7
+BROKER_TASK_SEND = 8
+BROKER_TASK_DONE = 9
+BROKER_TASK_REJECT = 10
+BROKER_ON_POOL_SIZE_CHANGED = 11
 
 
 # POOL
@@ -84,7 +84,7 @@ def pool_remove_worker(worker_ident):
 
 
 # BROKER
-def broker_add_consumer(task_id, broker_point):
+def broker_task_register(task_id, broker_point):
     """Command to add new consumer with `broker_point` to task
 
     Args:
@@ -94,10 +94,10 @@ def broker_add_consumer(task_id, broker_point):
     Returns:
         Command:
     """
-    return Command(command=BROKER_ADD_CONSUMER, args=dict(task_id=task_id, broker_point=broker_point))
+    return Command(command=BROKER_TASK_REGISTER, args=dict(task_id=task_id, broker_point=broker_point))
 
 
-def broker_publish(request):
+def broker_task_send(request):
     """Command to publish `primitives.Request` to customer
 
     Args:
@@ -106,10 +106,10 @@ def broker_publish(request):
     Returns:
         Command:
     """
-    return Command(command=BROKER_PUBLISH, args=request)
+    return Command(command=BROKER_TASK_SEND, args=request)
 
 
-def broker_ack(broker_point, delivery_tag):
+def broker_task_done(broker_point, delivery_tag):
     """Command to acknowledge task message by it's broker point, delivery_tag or scheduler_tag
 
     Args:
@@ -118,10 +118,10 @@ def broker_ack(broker_point, delivery_tag):
     Returns:
         Command:
     """
-    return Command(command=BROKER_ACK, args={'broker_point': broker_point, 'delivery_tag': delivery_tag})
+    return Command(command=BROKER_TASK_DONE, args={'broker_point': broker_point, 'delivery_tag': delivery_tag})
 
 
-def broker_reject(broker_point, delivery_tag):
+def broker_task_reject(broker_point, delivery_tag):
     """Command to reject task message by it's broker point, delivery_tag or scheduler_tag
 
     Args:
@@ -131,10 +131,10 @@ def broker_reject(broker_point, delivery_tag):
     Returns:
         Command:
     """
-    return Command(command=BROKER_REJECT, args={'broker_point': broker_point, 'delivery_tag': delivery_tag})
+    return Command(command=BROKER_TASK_REJECT, args={'broker_point': broker_point, 'delivery_tag': delivery_tag})
 
 
-def broker_prefetch_count(broker_point, new_size):
+def broker_on_pool_size_changed():
     """Command to change prefetch_count
 
     Args:
@@ -144,4 +144,4 @@ def broker_prefetch_count(broker_point, new_size):
     Returns:
         Command:
     """
-    return Command(command=BROKER_PREFETCH_COUNT, args={'broker_point': broker_point, 'new_size': new_size})
+    return Command(command=BROKER_ON_POOL_SIZE_CHANGED,args=None)

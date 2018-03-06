@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.0.6] - 2018-03-06
+### Added
+- Added BrokerInterface and BrokerAdapter
+
 ## [0.0.5] - 2018-03-01
 ### Changed
 - Broker configuration

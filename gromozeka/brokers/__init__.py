@@ -1,3 +1,4 @@
-from gromozeka.brokers.rabbit import Broker, Consumer
+from gromozeka.brokers.base import BrokerAdapter
+from gromozeka.brokers.rabbit import RabbitMQPikaAdaptee
 
-__all__ = ['Broker', 'Consumer']
+__all__ = ['BrokerAdapter', 'RabbitMQPikaAdaptee']
