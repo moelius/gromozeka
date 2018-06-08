@@ -1,0 +1,8 @@
+-r ./base.txt
+
+networkx==2.1
+matplotlib==2.2.2
+pyqt5==5.10.1
+pydot==1.2.4
+
+# graphviz must be installed too see https://www.graphviz.org/download/

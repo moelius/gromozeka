@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package protocol;
+
+message ReplyToBrokerPoint {
+    string exchange = 1;
+    string routing_key = 2;
+}
+
+message Task {
+    string uuid = 1;
+    string task_id = 2;
+    string args = 3;
+    string kwargs = 4;
+    int32 retries = 5;
+    uint64 delay = 6;
+    string state = 7;
+    uint64 delivery_tag = 8;
+    string graph_uuid = 9;
+    ReplyToBrokerPoint reply_to = 10;
+}

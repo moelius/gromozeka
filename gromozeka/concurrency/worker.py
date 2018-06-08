@@ -3,6 +3,7 @@ import logging
 import multiprocessing
 import queue
 import threading
+import traceback
 
 from gromozeka.exceptions import Retry, MaxRetriesExceedException
 from gromozeka.primitives import Task
@@ -12,9 +13,9 @@ class Worker:
     """Worker class for `gromozeka.concurrency.Pool`. Uses as mixin.
 
     Attributes:
-        logger(:obj:`logging.Logger`): class logger
-        pool(:obj:`gromozeka.concurrency.Pool`): parent pool instance
-        _stop_event(:obj:`multiprocessing.Event` or :obj:`threading.Event`)
+        logger(logging.Logger): class logger
+        pool(gromozeka.concurrency.Pool): parent pool instance
+        _stop_event(multiprocessing.Event or threading.Event)
 
     Args:
         pool(gromozeka.concurrency.Pool): Parent pool instance
@@ -36,28 +37,36 @@ class Worker:
             BaseException:
         """
         self.logger.info("start")
+        exc = None
         while not self._stop_event.is_set():
             try:
                 # get request object from queue
-                request = self.pool.in_queue.get(True, 0.05)
+                task_proto = self.pool.worker_queue.get(True, 0.05)
             except queue.Empty:
                 continue
             # make Task object from request
-            task = Task.from_request(request)
-            task.on_receive()
+            task = Task.from_proto(task_proto)
             try:
-                functools.partial(task.func, *(task, *task.args) if task.bind else task.args, **task.kwargs)()
-                # TODO Need result backed to use result queue
-                # self.pool.out_queue.put(res)
-                task.on_success()
+                res = functools.partial(task.func, *(task, *task.args) if task.bind else task.args, **task.kwargs)()
+                task.on_success(res)
             except Retry as e:
+                task.error = str(e)
+                task.exc = traceback.format_stack()
                 if task.on_retry(e):
                     continue
+                task.on_fail()
                 self.pool.remove_worker(self.ident)
-                task.on_fail(MaxRetriesExceedException())
+                exc = MaxRetriesExceedException()
+                break
             except Exception as e:
+                task.error = str(e)
+                task.exc = traceback.format_exc()
+                task.on_fail()
                 self.pool.remove_worker(self.ident)
-                task.on_fail(e)
+                exc = e
+                break
+        if exc is not None:
+            raise exc
         self.logger.info("stop")
 
     def stop(self):
@@ -79,7 +88,7 @@ class ProcessWorker(multiprocessing.Process, Worker):
     """See `gromozeka.concurrency.Worker` documentation
 
     Attributes:
-        _stop_event(:obj:`multiprocessing.Event`): Stop event
+        _stop_event(multiprocessing.Event): Stop event
     """
     __doc__ = Worker.__doc__
 
@@ -93,14 +102,13 @@ class ProcessWorker(multiprocessing.Process, Worker):
 
     def stop(self, timeout=None):
         self._stop_event.set()
-        super().join(timeout)
 
 
 class ThreadWorker(threading.Thread, Worker):
     """See `gromozeka.concurrency.Worker` documentation
 
     Attributes:
-        _stop_event(:obj:`threading.Event`): Stop event
+        _stop_event(threading.Event): Stop event
     """
     __doc__ = Worker.__doc__
 
@@ -114,4 +122,3 @@ class ThreadWorker(threading.Thread, Worker):
 
     def stop(self, timeout=None):
         self._stop_event.set()
-        super().join(timeout)

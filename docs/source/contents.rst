@@ -9,9 +9,9 @@ This part of the documentation shows, how you can use Gromozeka.
    usage/configuration
    usage/logging
    usage/simple_task
-   usage/periodic_task
    usage/raw_task
    usage/task_retry.rst
+   usage/task_workflows.rst
 
 API Reference
 -------------

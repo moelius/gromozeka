@@ -1,1 +1,2 @@
-pika==0.11.2
+-r ./redis.txt
+-r ./rabbit.txt

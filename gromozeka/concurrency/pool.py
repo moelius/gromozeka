@@ -2,10 +2,10 @@ import logging
 import multiprocessing
 import queue
 import threading
-import time
 
+import gromozeka.app
 from gromozeka.concurrency import commands
-from gromozeka.concurrency.worker import ThreadWorker
+from gromozeka.concurrency.worker import ThreadWorker, ProcessWorker
 
 
 class Pool(threading.Thread):
@@ -13,10 +13,9 @@ class Pool(threading.Thread):
 
     Attributes:
         logger(:obj:`logging.Logger`): Class logger
-        in_queue(:obj:`multiprocessing.Queue`): Queue to receive input requests
-        out_queue(:obj:`multiprocessing.Queue`): Result queue
-        cmd_in_queue(:obj:`multiprocessing.Queue`): Command queue
-        cmd_out_queue(:obj:`multiprocessing.Queue`): Command result queue
+        worker_queue(:obj:`multiprocessing.Queue`): Queue to receive input requests
+        cmd(:obj:`multiprocessing.Queue`): Command queue
+        cmd_out(:obj:`multiprocessing.Queue`): Command result queue
         max_workers(:obj:`int`): Number of workers to start
         worker_class(:class:`gromozeka.concurrency.Worker`): worker class
         workers(:obj:`list` of :obj:`gromozeka.concurrency.Worker`): list of worker instances
@@ -27,20 +26,22 @@ class Pool(threading.Thread):
         worker_class(:class:`gromozeka.concurrency.Worker`, optional): Worker class
     """
 
-    __slots__ = ['logger', 'init_max_workers', 'worker_class', 'in_queue', 'out_queue', 'cmd_in_queue', 'cmd_out_queue',
-                 '_stop_event', 'workers', 'is_on_stop']
+    __slots__ = ['logger', 'init_max_workers', 'worker_cls', 'worker_queue', 'cmd', 'cmd_out', '_stop_event', 'workers',
+                 'is_on_stop']
 
     def __init__(self, max_workers=1, worker_class=ThreadWorker, logger=None):
         self.logger = logger or logging.getLogger("gromozeka.pool")
         self.init_max_workers = max_workers
-        self.worker_class = worker_class
-        self.in_queue = multiprocessing.Queue(self.init_max_workers)
-        self.out_queue = multiprocessing.Queue()
-        self.cmd_in_queue = multiprocessing.Queue()
-        self.cmd_out_queue = multiprocessing.Queue()
-        self._stop_event = multiprocessing.Event()
+        self.worker_cls = worker_class
+        self.worker_queue = multiprocessing.Queue() if issubclass(self.worker_cls, ProcessWorker) else queue.Queue()
+        from gromozeka.brokers import BrokerAdapter
+        from gromozeka.backends import BackendAdapter
+        self.cmd = multiprocessing.Queue() if isinstance(self, (BrokerAdapter, BackendAdapter)) else queue.Queue()
+        self.cmd_out = multiprocessing.Queue() if isinstance(self, (BrokerAdapter, BackendAdapter)) else queue.Queue()
+        self._stop_event = threading.Event()
         self.is_on_stop = False
         self.workers = {}
+        self.lock = threading.Lock()
         super().__init__()
 
     def listen_cmd(self):
@@ -49,7 +50,7 @@ class Pool(threading.Thread):
         """
         while not self._stop_event.is_set():
             try:
-                command, args = self.cmd_in_queue.get(True, 0.05)
+                command, args = self.cmd.get(True, 0.05)
             except queue.Empty:
                 continue
             if command == commands.POOL_SHRINK:
@@ -58,8 +59,6 @@ class Pool(threading.Thread):
                 self._grow(args)
             elif command == commands.POOL_REMOVE_WORKER:
                 self._remove_worker(args)
-            elif command == commands.POOL_SIZE:
-                self._size()
             elif command == commands.POOL_STOP:
                 self.stop_()
 
@@ -67,39 +66,32 @@ class Pool(threading.Thread):
         """Start pool
 
         """
-        super().start()
-        return self.cmd_out_queue.get()
-
-    @property
-    def cmd(self):
-        """Command queue alias
-
-        Returns:
-            multiprocessing.Queue: Command queue
-        """
-        return self.cmd_in_queue
+        with self.lock:
+            super().start()
+            self.cmd_out.get()
+        gromozeka.app.get_app().broker_adapter.on_pool_size_changed()
 
     def run(self):
         """Start :attr:`workers` in threads or processes
 
         """
         self.logger.info("start")
-        self.grow(self.init_max_workers)
+        self._grow(self.init_max_workers)
         self.listen_cmd()
 
     def stop(self):
         """Stop pool and child :attr:`workers`
 
         """
-        self.cmd.put(commands.pool_stop())
+        with self.lock:
+            self.cmd.put(commands.pool_stop())
+            self.cmd_out.get()
+        self.logger.info("stop")
 
     def stop_(self):
         self.is_on_stop = True
-        self.out_queue.cancel_join_thread()
-        self.in_queue.cancel_join_thread()
         self._shrink(len(self.workers))
         self._stop_event.set()
-        self.logger.info("stop")
 
     def grow(self, n):
         """Grow pool by `n` number of workers
@@ -107,19 +99,23 @@ class Pool(threading.Thread):
         Args:
             n(int): Number to grow
         """
-        self.cmd.put(commands.pool_grow(n))
+        with self.lock:
+            self.cmd.put(commands.pool_grow(n))
+            self.cmd_out.get()
+        gromozeka.app.get_app().broker_adapter.on_pool_size_changed()
 
     def _grow(self, n):
-        starting_workers = []
+        workers = []
         for _ in range(n):
-            worker = self.worker_class(pool=self)
+            worker = self.worker_cls(pool=self)
             worker.start()
             self.workers[worker.ident] = worker
-            starting_workers.append(worker)
-        self._wait_for_start(starting_workers)
-        self.in_queue._maxsize = len(self.workers)
-        from gromozeka import get_app
-        get_app().broker.on_pool_size_changed()
+            workers.append(worker)
+        while workers:
+            for worker in workers:
+                if worker.is_alive():
+                    workers.remove(worker)
+        self.cmd_out.put(True)
 
     def shrink(self, n):
         """Shrink pool by `n` number of workers
@@ -127,33 +123,22 @@ class Pool(threading.Thread):
         Args:
             n(int): Number to grow
         """
-        self.cmd.put(commands.pool_shrink(n))
+        with self.lock:
+            self.cmd.put(commands.pool_shrink(n))
+            self.cmd_out.get()
+        gromozeka.app.get_app().broker_adapter.on_pool_size_changed()
 
     def _shrink(self, n):
-        stopping_workers = []
-        for _ in range(n):
-            ident = list(self.workers.keys())[-1]
+        workers = []
+        for ident in list(self.workers.keys())[0:n]:
             worker = self.workers.pop(ident)
             worker.stop()
-            stopping_workers.append(worker)
-        self._wait_for_stop(stopping_workers)
-        self.in_queue._maxsize = len(self.workers)
-        if self.is_on_stop:
-            return
-        from gromozeka import get_app
-        get_app().broker.on_pool_size_changed()
-
-    def size(self):
-        """Get pool size
-
-        Returns:
-            int: Number of workers in pool
-        """
-        self.cmd.put(commands.pool_size())
-        return self.cmd_out_queue.get()
-
-    def _size(self):
-        self.cmd_out_queue.put(len(self.workers))
+            workers.append(worker)
+        while workers:
+            for worker in workers:
+                if not worker.is_alive():
+                    workers.remove(worker)
+        self.cmd_out.put(True)
 
     def remove_worker(self, worker_ident):
         """Remove worker from pool by it`s ident
@@ -161,36 +146,21 @@ class Pool(threading.Thread):
         Args:
             worker_ident: Worker identification
         """
+        # with self.lock:
         self.cmd.put(commands.pool_remove_worker(worker_ident))
+        # self.cmd_out.get()
+        gromozeka.app.get_app().broker_adapter.on_pool_size_changed()
 
     def _remove_worker(self, worker_ident):
         del self.workers[worker_ident]
-        self.in_queue._maxsize = len(self.workers)
-        from gromozeka import get_app
-        get_app().broker.on_pool_size_changed()
+        self.cmd_out.put(True)
 
-    def _wait_for_stop(self, workers):
-        """Wait until workers stop
+    @property
+    def size(self):
+        """Not command do not use this in workers
 
-        Args:
-            workers(:obj:`list` of :obj:`concurrency.Worker`):
+        Returns:
+
         """
-        while workers:
-            for worker in workers:
-                if not worker.is_alive():
-                    workers.remove(worker)
-                time.sleep(0.05)
-        self.cmd_out_queue.put(True)
-
-    def _wait_for_start(self, workers):
-        """Wait until workers start
-
-        Args:
-            workers(:obj:`list` of :obj:`concurrency.Worker`):
-        """
-        while workers:
-            for worker in workers:
-                if worker.is_alive():
-                    workers.remove(worker)
-                time.sleep(0.05)
-        self.cmd_out_queue.put(True)
+        with self.lock:
+            return len(self.workers)

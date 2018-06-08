@@ -1,11 +1,14 @@
 import functools
+import json
 import logging
 import uuid
+from collections import deque
 
 import gromozeka
 import gromozeka.concurrency
-import gromozeka.concurrency.scheduler
-from gromozeka.primitives import TaskType, SchedulerType, Request
+from gromozeka.exceptions import SerializationError
+from gromozeka.primitives.dag import Vertex, Graph, GROUP, CHAIN, ACHAIN
+from gromozeka.primitives.task_pb2 import Task as ProtoTask, ReplyToBrokerPoint
 
 PENDING = 'PENDING'
 RECEIVED = 'RECEIVED'
@@ -17,7 +20,7 @@ REJECTED = 'REJECTED'
 RETRY = 'RETRY'
 
 
-def task(bind=False, max_retries=0, retry_countdown=1, eta=None, every=None, interval=None, at=None):
+def task(bind=False, max_retries=0, retry_countdown=1, ignore_result=None, reply_to=None):
     """Task decorator. Use to make usual function as task
 
     After this, you must register task
@@ -34,7 +37,7 @@ def task(bind=False, max_retries=0, retry_countdown=1, eta=None, every=None, int
 
             app=Gromozeka()
 
-            app.register_task(
+            app.register(
                 hello_world(),
                 broker_point=BrokerPointType(
                     exchange="first_exchange",
@@ -67,10 +70,8 @@ def task(bind=False, max_retries=0, retry_countdown=1, eta=None, every=None, int
         bind(:obj:`bool`, optional): If `True` `Task` will be in function arguments as first argument
         max_retries(:obj:`int`, optional): Maximum number of retries
         retry_countdown(:obj:`int` or :obj:`float`, optional): Pause between retries
-        eta(str): Datetime when to run task, formatted as "%Y-%m-%d %H:%M:%S.%f"
-        every(:obj:`str`, optional): May be seconds, minutes, hours, days, weeks.
-        interval(:obj:`int`, optional): Uses with `every`.
-        at(:obj:`str`, optional): Time formatted as `hour:minute` or `hour:minute:second`.
+        ignore_result(bool): If False result will be saved in result backend
+        reply_to(BrokerPoint):
 
     Returns:
         gromozeka.primitives.Task: task object
@@ -78,9 +79,14 @@ def task(bind=False, max_retries=0, retry_countdown=1, eta=None, every=None, int
 
     def task_decor(f):
         @functools.wraps(f)
-        def wrapper():
-            return Task(func=f, bind=bind, max_retries=max_retries, retry_countdown=retry_countdown, eta=eta,
-                        every=every, interval=interval, at=at)
+        def wrapper(*args, **kwargs):
+            if reply_to:
+                reply_to_exchange, reply_to_routing_key = reply_to.exchange, reply_to.routing_key
+            else:
+                reply_to_exchange, reply_to_routing_key = None, None
+            return Task(func=f, bind=bind, max_retries=max_retries, retry_countdown=retry_countdown,
+                        ignore_result=ignore_result, reply_to_exchange=reply_to_exchange,
+                        reply_to_routing_key=reply_to_routing_key, args=args, kwargs=kwargs)
 
         return wrapper
 
@@ -91,7 +97,7 @@ class RegistryTask:
     """Task registry class
 
     Attributes:
-        id(:obj:`str`): Task identification
+        task_id(:obj:`str`): Task identification
         func: Task function
         bind(:obj:`bool`): If `True` `Task` will be in function arguments as first argument
         broker_point(:obj:`gromozeka.primitives.BrokerPointType`): Broker entry
@@ -100,10 +106,9 @@ class RegistryTask:
         max_retries(:obj:`int`): Maximum number of retries
         retry_countdown(:obj:`int` or :obj:`float`): Pause between retries
         pool(:obj:`gromozeka.concurrency.Pool`): Task workers pool
-
     Args:
         broker_point(gromozeka.primitives.BrokerPointType): Broker entry
-        id_(str): Task identification
+        task_id(str): Task identification
         func: Task function
         bind(bool): If `True` `Task` will be in function arguments as first argument
         worker_class(gromozeka.concurrency.Worker): Task workers will be this type
@@ -111,11 +116,12 @@ class RegistryTask:
         retry_countdown(:obj:`int` or :obj:`float`): Pause between retries
     """
 
-    __slots__ = ['id', 'func', 'bind', 'broker_point', 'worker_class', 'max_workers', 'max_retries', 'retry_countdown',
-                 'pool']
+    __slots__ = ['task_id', 'func', 'bind', 'broker_point', 'worker_class', 'max_workers', 'max_retries',
+                 'retry_countdown', 'pool', 'ignore_result', 'deserializator']
 
-    def __init__(self, broker_point, id_, func, bind, worker_class, max_workers, max_retries, retry_countdown):
-        self.id = id_
+    def __init__(self, broker_point, task_id, func, bind, worker_class, max_workers, max_retries, retry_countdown,
+                 ignore_result):
+        self.task_id = task_id
         self.func = func
         self.bind = bind
         self.broker_point = broker_point
@@ -123,28 +129,37 @@ class RegistryTask:
         self.max_workers = max_workers
         self.max_retries = max_retries
         self.retry_countdown = retry_countdown
+        self.ignore_result = ignore_result
         self.pool = gromozeka.concurrency.Pool(max_workers=self.max_workers, worker_class=self.worker_class)
 
 
-class Task:
-    """Task class.
+class BrokerPoint:
+    def __init__(self, exchange=None, exchange_type=None, queue=None, routing_key=None):
+        self.exchange = exchange
+        self.exchange_type = exchange_type
+        self.queue = queue
+        self.routing_key = routing_key
 
-    Attributes:
-        uuid(:obj:`uuid.uuid4`, optional): Unique task runtime identification
-        id(:obj:`str`): Task registry identification
-        logger(:obj:`logging.Logger`): Class logger
-        state(:obj:`str`): Current task state
-        func: Task function
-        args(:obj:`list`):Task function arguments
-        kwargs(:obj:`dict`): Task function keyword arguments
-        bind(:obj:`bool`): If `True` `Task` will be in function arguments as first argument
-        max_retries(:obj:`int`): Maximum number of retries
-        retry_countdown(:obj:`int` or :obj:`float`): Pause between retries
-        retries(:obj:`int`): retries counter
-        countdown(:obj:`str`): Retry countdown (%Y-%m-%d %H:%M:%S.%f)
-        eta(:obj:`str`, optional): Task ETA (%Y-%m-%d %H:%M:%S.%f)
-        broker_point(:obj:`gromozeka.primitives.BrokerPointType`): Broker entry
-        delivery_tag(:obj:`int`): Original message delivery tag
+    def __str__(self):
+        return '_'.join([v for v in to_dict(self).values() if v])
+
+
+class TaskDeserializator:
+
+    def deserialize(self, raw_task):
+        """
+
+        Args:
+            raw_task: raw task to deserialize
+
+        Returns:
+            task properties, tuple task_id args kwargs uuid graph_uuid
+        """
+        raise NotImplementedError
+
+
+class Task(Vertex):
+    """Task class.
 
     Args:
         func: Task function
@@ -155,60 +170,72 @@ class Task:
         max_retries(:obj:`int`, optional): Maximum number of retries
         retry_countdown(:obj:`int` or :obj:`float`, optional): Pause between retries
         retries(:obj:`int`, optional): retries counter
-        countdown(:obj:`str`, optional): Retry countdown (%Y-%m-%d %H:%M:%S.%f)
-        eta(:obj:`str`, optional): Task ETA (%Y-%m-%d %H:%M:%S.%f)
+        delay(:obj:`str`, optional): Retry countdown (%Y-%m-%d %H:%M:%S.%f)
         uuid_(:obj:`uuid.uuid4`, optional): Unique task runtime identification
         broker_point(gromozeka.primitives.BrokerPointType): Broker entry
         delivery_tag(:obj:`int`, optional): Original message delivery tag
     """
 
-    __slots__ = ['uuid', 'id', 'logger', 'func', 'args', 'kwargs', 'bind', 'max_retries', 'retry_countdown', 'retries',
-                 'countdown', '_eta', 'broker_point', 'delivery_tag', 'state', '_every', '_interval', '_at']
+    __slots__ = ['uuid', 'task_id', 'logger', 'func', 'args', 'kwargs', 'bind', 'app', 'max_retries', 'retry_countdown',
+                 'retries', 'delay', 'broker_point', 'delivery_tag', 'state', 'manual_ack',
+                 'ignore_result', 'graph_uuid', 'reply_to_exchange', 'reply_to_routing_key']
 
-    def __init__(self, func, args=None, kwargs=None, bind=None, state=PENDING, max_retries=0, retry_countdown=1,
-                 retries=0, countdown='', eta='', uuid_=None, broker_point=None, delivery_tag=None, every=None,
-                 interval=None, at=None):
-
-        self.uuid = uuid_ or uuid.uuid4()
-        self.id = "%s.%s" % (func.__module__, func.__name__)
-        self.logger = logging.getLogger("gromozeka.pool.worker.{}".format(self.id))
-        self.state = state
+    def __init__(self, func, args=None, kwargs=None, bind=None, app=None, state=None, max_retries=None,
+                 retry_countdown=None, retries=None, delay=None, uuid_=None, broker_point=None, delivery_tag=None,
+                 ignore_result=None, graph_uuid=None, reply_to_exchange=None, reply_to_routing_key=None):
+        self.app = app or gromozeka.get_app()
+        self.uuid = uuid_
+        self.task_id = "%s.%s" % (func.__module__, func.__name__)
+        self.logger = logging.getLogger("gromozeka.pool.worker.{}".format(self.task_id))
+        self.state = state or PENDING
         self.func = func
         self.args = args or []
         self.kwargs = kwargs or {}
         self.bind = bind or False
-        self.max_retries = max_retries
-        self.retry_countdown = retry_countdown
-        self.retries = retries
-        self.countdown = countdown
-        self._eta = eta
+        self.max_retries = max_retries or 1
+        self.retry_countdown = retry_countdown or 0
+        self.retries = retries or 0
+        self.delay = delay or 0
         self.broker_point = broker_point
-        self.delivery_tag = delivery_tag
-        self._every = every
-        self._interval = interval
-        self._at = at
+        self.delivery_tag = delivery_tag or 0
+        self.manual_ack = False
+        self.ignore_result = ignore_result or False
+        self.graph_uuid = graph_uuid
+        self.error = None
+        self.exc = None
+        self.reply_to_exchange = reply_to_routing_key
+        self.reply_to_routing_key = reply_to_exchange
+        super().__init__(uuid=self.uuid, task_id=self.task_id, args=self.args, kwargs=self.kwargs, bind=self.bind,
+                         reply_to_exchange=reply_to_exchange, reply_to_routing_key=reply_to_routing_key)
 
-    def register(self, broker_point, worker_class=None, max_workers=1, max_retries=0, retry_countdown=0):
+    def register(self, broker_point, worker_class=None, max_workers=1, max_retries=0, retry_countdown=0,
+                 ignore_result=False, broker_options=None, deserializator=None):
         """Register task in task registry
 
         Args:
-            broker_point(gromozeka.primitives.BrokerPointType): Broker entry
-            worker_class(gromozeka.concurrency.Worker): Task workers will be this type
+            broker_point(gromozeka.primitives.ProtoBrokerPoint): Broker entry
+            worker_class(:class:`gromozeka.concurrency.Worker`): Task workers will be this type
             max_workers(int): Number of task workers
             max_retries(int): Maximum number of retries
             retry_countdown(:obj:`int` or :obj:`float`): Pause between retries
+            ignore_result(bool): If False result will be saved in result backend
+            broker_options: Specific broker options. See NatsOptions broker for example
+            deserializator(TaskDeserializator): Custom task deserializator
 
         Returns:
             gromozeka.primitives.Task:
         """
+        if deserializator:
+            if not isinstance(deserializator, TaskDeserializator):
+                raise SerializationError('custom deserializator should be inherited from `TaskDeserializator`')
         self.broker_point = broker_point
-        r_task = RegistryTask(id_=self.id, func=self.func, bind=self.bind, worker_class=worker_class,
+        r_task = RegistryTask(task_id=self.task_id, func=self.func, bind=self.bind, worker_class=worker_class,
                               max_workers=max_workers, max_retries=max_retries or self.max_retries,
                               retry_countdown=retry_countdown or self.retry_countdown or 1,
-                              broker_point=broker_point or self.broker_point)
-        app = gromozeka.get_app()
-        app.register_task(task=r_task, broker_point=self.broker_point)
-        app.broker.task_register(task_id=self.id, broker_point=broker_point)
+                              broker_point=broker_point or self.broker_point, ignore_result=ignore_result)
+        self.app.register(task=r_task, broker_point=self.broker_point)
+        self.app.broker_adapter.task_register(task_id=self.task_id, broker_point=broker_point, options=broker_options,
+                                              deserializator=deserializator)
         return self
 
     def __call__(self, *args, **kwargs):
@@ -231,7 +258,9 @@ class Task:
         Returns:
             function result
         """
-        return functools.partial(self.func, *(self, *args), **kwargs)()
+        if self.bind:
+            args[0:0] = [self]
+        return functools.partial(self.func, *args, **kwargs)()
 
     @property
     def request(self):
@@ -240,42 +269,68 @@ class Task:
         Returns:
             gromozeka.primitives.Request:
         """
-        task_ = TaskType(uuid=self.uuid.__str__(), id=self.id, args=self.args, kwargs=self.kwargs, retries=self.retries,
-                         state=self.state, delivery_tag=self.delivery_tag)
-        if self._eta or self.countdown:
-            scheduler = SchedulerType(countdown=self.countdown, eta=self._eta, every=self._every,
-                                      interval=self._interval, at=self._at)
+        args = json.dumps(self.args) if self.args else None
+        kwargs = json.dumps(self.kwargs) if self.kwargs else None
+        if not self.broker_point:
+            self.broker_point = self.app.get_task(self.task_id).broker_point
+        if self.reply_to_exchange:
+            reply_to = ReplyToBrokerPoint(exchange=self.reply_to_exchange,
+                                          routing_key=self.reply_to_routing_key)
         else:
-            scheduler = None
-        return Request(task=task_, broker_point=self.broker_point, scheduler=scheduler)
+            reply_to = None
+        return ProtoTask(uuid=self.uuid.__str__(), task_id=self.task_id, args=args, kwargs=kwargs, retries=self.retries,
+                         delay=self.delay, state=self.state, delivery_tag=self.delivery_tag, graph_uuid=self.graph_uuid,
+                         reply_to=reply_to)
 
     @classmethod
-    def from_request(cls, request):
+    def from_proto(cls, raw_task, delivery_tag=None, deserializator=False):
         """Make `Task` from `Request`
 
         Args:
-            request(gromozeka.primitives.Request): task `Request`
+            raw_task(gromozeka.primitives.Request): task `Request`
+            delivery_tag(int): use with deserializator, this arg from broker
+            deserializator(TaskDeserializator):
 
         Returns:
             gromozeka.primitives.Task:
         """
         app = gromozeka.get_app()
-        r_task = app.get_task(request.task.id)
+        if not deserializator:
+            proto_task = ProtoTask()
+            proto_task.ParseFromString(raw_task)
+            task_uuid = proto_task.uuid
+            graph_uuid = proto_task.graph_uuid
+            task_id = proto_task.task_id
+            args = None if not proto_task.args else json.loads(proto_task.args)
+            kwargs = None if not proto_task.kwargs else json.loads(proto_task.kwargs)
+            delay = proto_task.delay
+            delivery_tag = proto_task.delivery_tag
+            retries = proto_task.retries
+            reply_to_exchange, reply_to_routing_key = proto_task.reply_to.exchange, proto_task.reply_to.routing_key
+
+        else:
+            task_uuid, task_id, graph_uuid, args, kwargs, \
+            retries, delay, reply_to_exchange, reply_to_routing_key = deserializator.deserialize(raw_task=raw_task)
+        r_task = app.get_task(task_id)
         return cls(func=r_task.func,
-                   args=request.task.args,
-                   kwargs=request.task.kwargs,
+                   args=args,
+                   kwargs=kwargs,
                    bind=r_task.bind,
+                   app=app,
                    max_retries=r_task.max_retries,
                    retry_countdown=r_task.retry_countdown,
-                   retries=request.task.retries,
-                   countdown=request.scheduler.countdown if request.scheduler else None,
-                   eta=request.scheduler.eta if request.scheduler else None,
-                   every=request.scheduler.every if request.scheduler else None,
-                   interval=request.scheduler.interval if request.scheduler else None,
-                   at=request.scheduler.at if request.scheduler else None,
-                   uuid_=request.task.uuid,
-                   broker_point=request.broker_point,
-                   delivery_tag=request.task.delivery_tag)
+                   retries=retries,
+                   delay=delay,
+                   uuid_=task_uuid,
+                   delivery_tag=delivery_tag,
+                   ignore_result=r_task.ignore_result,
+                   graph_uuid=graph_uuid,
+                   broker_point=BrokerPoint(exchange=r_task.broker_point.exchange,
+                                            exchange_type=r_task.broker_point.exchange_type,
+                                            queue=r_task.broker_point.queue,
+                                            routing_key=r_task.broker_point.routing_key),
+                   reply_to_exchange=reply_to_exchange,
+                   reply_to_routing_key=reply_to_routing_key)
 
     def apply_async(self, *args, **kwargs):
         """Run `Task` asynchronously
@@ -294,63 +349,19 @@ class Task:
             *args: `Task` function arguments
             **kwargs: `Task` function keyword arguments
         """
-        if self._every:
-            delay = gromozeka.concurrency.scheduler.delay(last_run=self._eta, every=self._every,
-                                                          interval=self._interval, at=self._at)
-            self._eta = gromozeka.concurrency.scheduler.new_eta(delay)
-        app = gromozeka.get_app()
-        r_task = app.get_task(self.id)
+        self.uuid = self.uuid or str(uuid.uuid4())
+        r_task = self.app.get_task(self.task_id)
         self.broker_point = r_task.broker_point
         self.args = args or self.args
         self.kwargs = kwargs or self.kwargs
-        app.broker.task_send(request=self.request)
+        self.app.broker_adapter.task_send(request=self.request.SerializeToString(), broker_point=self.broker_point)
 
-    def eta(self, datetime):
-        """
-
-        Args:
-            datetime(str): Datetime formatted as "%Y-%m-%d %H:%M:%S.%f"
-
-        Returns:
-            gromozeka.primitives.Task:
-        """
-        self._eta = datetime
+    def a(self, *args):
+        self.args = args
         return self
 
-    def every(self, period):
-        """
-
-        Args:
-            period(str): May be seconds, minutes, hours, days, weeks.
-
-        Returns:
-            gromozeka.primitives.Task:
-        """
-        self._every = period
-        return self
-
-    def interval(self, count):
-        """
-
-        Args:
-            count(int): Period interval. Uses with every.
-
-        Returns:
-            gromozeka.primitives.Task:
-        """
-        self._interval = count
-        return self
-
-    def at(self, time):
-        """
-
-        Args:
-            time(str): Time formatted as `hour:minute` or `hour:minute:second`.
-
-        Returns:
-            gromozeka.primitives.Task:
-        """
-        self._at = time
+    def k(self, **kwargs):
+        self.kwargs = kwargs
         return self
 
     def on_receive(self):
@@ -389,17 +400,27 @@ class Task:
              bool: `True` if task will retry more times
         """
 
+        self.state = RETRY
         if not e.max_retries:
             e.max_retries = self.max_retries
         if not e.retry_countdown:
             e.retry_countdown = self.retry_countdown
         if e.max_retries <= self.retries:
             return False
-        self.state = RETRY
+        if self.graph_uuid:
+            graph_dict = self.app.backend_adapter.graph_get(self.graph_uuid)
+            graph = Graph.from_dict(graph_dict)
+            current = graph.vertex_by_uuid(self.uuid)
+            graph.state = current.state = self.state
+            current.error = self.error
+            self.app.backend_adapter.graph_update(graph_uuid=graph.uuid,
+                                                  verticies=[current.as_dict()],
+                                                  graph_state=graph.state, error_task_uuid=current.uuid,
+                                                  short_error=self.error)
         self._retry(e)
         return True
 
-    def on_success(self):
+    def on_success(self, res):
         """Event when task finishes successfully
 
         """
@@ -407,18 +428,116 @@ class Task:
             return
         self.state = SUCCESS
         self.retries = 0
-        self._ack()
-        if self._every:
-            self.uuid = uuid.uuid4()
-            self.apply_async(*self.args, **self.kwargs)
+        # result save
+        if not self.graph_uuid:
+            self.app.backend_adapter.result_set(self.uuid, res)
+            self._ack()
+            return
+        self.app.backend_adapter.result_set(self.uuid, res, graph_uuid=self.graph_uuid)
+        graph_dict = self.app.backend_adapter.graph_get(self.graph_uuid)
 
-    def on_fail(self, e):
+        graph = Graph.from_dict(graph_dict)
+        current = graph.vertex_by_uuid(self.uuid)
+        current.state = self.state
+        self.update_graph_states(graph, current, result=res)
+        for v in graph.next_vertex(from_uuid=current.uuid):
+            if v.args_from:
+                if v.args_from == current.fr:
+                    args_from = res
+                elif graph.vertex_by_uuid(v.args_from).operation == GROUP:
+                    args_from = self.app.backend_adapter.group_get_result(graph_uuid=graph.uuid, group_uuid=v.args_from)
+                else:
+                    args_from_parent_vertex = graph.vertex_by_uuid(v.args_from)
+                    args_from_vertex = graph.vertex_by_uuid(args_from_parent_vertex.children[1]).uuid
+                    args_from = self.app.backend_adapter.result_get(graph_uuid=graph.uuid,
+                                                                    task_uuid=args_from_vertex)
+                if v.bind:
+                    v.args[0:0] = [args_from] if v.bind else [args_from] + v.args
+                else:
+                    v.args = [args_from] + v.args
+            v.apply(graph.uuid)
+
+        # acknowledge broker message
+        self._ack()
+
+    def update_graph_states(self, graph, vertex, graph_state=None, result=None, error=None):
+        """
+
+        Args:
+            graph(gromozeka.primitives.dag.Graph): graph instance
+            vertex(gromozeka.primitives.dag.Vertex): vertex instance
+            graph_state:
+            result: Graph vertex result
+            error(str): error string
+
+        Returns:
+            list of gromozeka.primitives.dag.Vertex:
+        """
+        stack = deque([vertex])
+        completed = []
+        error_task_uuid = vertex.uuid if error else None
+        while stack:
+            current = stack[-1]
+            op = current.operation
+            if not op:
+                current.state = vertex.state
+                parent = graph.vertex_by_uuid(current.parent)
+                if parent:
+                    if parent.operation in (CHAIN, ACHAIN):
+                        if graph.is_chain_tail(current):
+                            stack.appendleft(parent)
+                    else:
+                        stack.appendleft(parent)
+            elif op == GROUP:
+                group_len = self.app.backend_adapter.group_add_result(
+                    graph_uuid=graph.uuid,
+                    group_uuid=current.uuid,
+                    task_uuid=vertex.uuid,
+                    result=result)
+                if group_len != len(current.children):
+                    stack.pop()
+                    continue
+                current.state = vertex.state
+                parent = graph.vertex_by_uuid(current.parent)
+                if parent:
+                    if parent.operation in (CHAIN, ACHAIN):
+                        if graph.is_chain_tail(current):
+                            stack.appendleft(parent)
+                    else:
+                        stack.appendleft(parent)
+            elif current.state == vertex.state:
+                if current.parent:
+                    stack.appendleft(graph.vertex_by_uuid(current.parent))
+            elif graph.vertex_by_uuid(current.children[1]) in completed:
+                graph.vertex_by_uuid(current.children[0]).state = vertex.state
+                current.state = vertex.state
+                if current.parent:
+                    stack.appendleft(graph.vertex_by_uuid(current.parent))
+            else:
+                stack.pop()
+                continue
+            if current.uuid == graph.last_uuid:
+                graph_state = vertex.state
+            completed.append(current)
+            stack.pop()
+        self.app.backend_adapter.graph_update(graph_uuid=graph.uuid, verticies=[comp.as_dict() for comp in completed],
+                                              graph_state=graph_state, error_task_uuid=error_task_uuid,
+                                              short_error=error)
+
+    def on_fail(self):
         """Event when task failed with `Exception`
 
         """
         self.state = FAILURE
+        if self.graph_uuid:
+            graph_dict = self.app.backend_adapter.graph_get(self.graph_uuid)
+            graph = Graph.from_dict(graph_dict)
+            current = graph.vertex_by_uuid(self.uuid)
+            current.state = self.state
+            current.error = self.error
+            current.exc = self.exc
+            self.update_graph_states(graph=graph, vertex=current, graph_state=self.state, error=self.error)
         self._reject()
-        raise e
 
     def cancel(self):
         """Cancel task. Use this method in `Task` function. Bind option must be `True`
@@ -441,20 +560,27 @@ class Task:
         Args:
             e(gromozeka.exceptions.Retry):
 
-        Returns:
-
         """
         self.logger.warning("retry on error: {0}".format(e))
-        self.countdown = gromozeka.concurrency.scheduler.new_eta(seconds=e.retry_countdown)
+        self.delay = e.retry_countdown
         self.retries += 1
-        app = gromozeka.get_app()
-        app.broker.task_send(request=self.request)
+        self.app.broker_adapter.task_send_delayed(request=self.request.SerializeToString(),
+                                                  broker_point=self.broker_point, delay=self.delay)
         self._reject()
 
     def _ack(self):
-        app = gromozeka.get_app()
-        app.broker.task_done(broker_point=self.broker_point, delivery_tag=self.delivery_tag)
+        if self.manual_ack:
+            return
+        self.app.broker_adapter.task_done(task_uuid=self.uuid, broker_point=self.broker_point,
+                                          delivery_tag=self.delivery_tag)
+
+    def _result_set(self, result):
+        return self.app.backend_adapter.result_set(self.uuid, result)
 
     def _reject(self):
-        app = gromozeka.get_app()
-        app.broker.task_reject(broker_point=self.broker_point, delivery_tag=self.delivery_tag)
+        self.app.broker_adapter.task_reject(broker_point=self.broker_point, delivery_tag=self.delivery_tag)
+
+
+def to_dict(o):
+    return {k: getattr(o, k) for k in o.__dir__() if
+            not callable(getattr(o, k)) and not k.startswith('__')}
