@@ -21,9 +21,11 @@ LOGGING = {
         'gromozeka': {'handlers': ['console'], 'level': 'INFO'},
         'gromozeka.pool': {},
         'gromozeka.pool.worker': {},
+        'gromozeka.pool.worker.*': {},
         'gromozeka.scheduler': {},
         'gromozeka.broker': {},
         'gromozeka.broker.consumer': {},
+        'gromozeka.broker.consumer.*': {},
     }
 }
 
@@ -35,26 +37,20 @@ class Config:
         debug(:obj:`bool`): Set logger level. Default: `False`
         broker_reconnect_max_retries(:obj:`int`): Broker reconnect attempts. Default: 10
         broker_reconnect_retry_countdown(:obj:`int`): Sleep time between reconnects (seconds). Default: 10
-        broker_retry_exchange(:obj:`str`): Broker exchange for retries. Default: 'countdown_exchange'
-        broker_retry_queue(:obj:`str`): Broker queue name for retries. Default: 'countdown_queue'
-        broker_retry_routing_key(:obj:`str`): Broker routing key for retries. Default: 'countdown'
-        broker_eta_exchange(:obj:`str`): Broker exchange for eta tasks. Default: 'eta_exchange'
-        broker_eta_queue(:obj:`str`): Broker queue for retries. Default: 'eta_queue'
-        broker_eta_routing_key(:obj:`str`): Broker routing key for retries. Default: 'eta'
         broker_url(:obj:`str`): Broker url. Default: 'amqp://guest:guest@localhost:5672/%2F'
+        backend_url(:obj:`str`): Backend url. Default: 'redis://localhost'
+        backend_reconnect_max_retries(:obj:`int`): Backend reconnect attempts. Default: 10
+        backend_reconnect_retry_countdown(:obj:`int`): Sleep time between reconnects (seconds). Default: 10
     """
 
     def __init__(self):
         self.debug = False
+        self.broker_url = 'amqp://guest:guest@localhost:5672/%2F'
         self.broker_reconnect_max_retries = 10
         self.broker_reconnect_retry_countdown = 10
-        self.broker_retry_exchange = 'countdown_exchange'
-        self.broker_retry_queue = 'countdown_queue'
-        self.broker_retry_routing_key = 'countdown'
-        self.broker_eta_exchange = 'eta_exchange'
-        self.broker_eta_queue = 'eta_queue'
-        self.broker_eta_routing_key = 'eta'
-        self.broker_url = 'amqp://guest:guest@localhost:5672/%2F'
+        self.backend_url = 'redis://localhost'
+        self.backend_reconnect_max_retries = 10
+        self.backend_reconnect_retry_countdown = 10
         config.dictConfig(LOGGING)
 
     def from_env(self):
@@ -99,10 +95,7 @@ class Config:
         if type(None) == type_:
             setattr(self, name, attr)
         if type(False) == type_:
-            if attr in ('0', 0, 'false', 'False', ''):
-                setattr(self, name, False)
-            else:
-                setattr(self, name, True)
+            setattr(self, name, False if attr in ('0', 0, 'false', 'False', '') else True)
         else:
             setattr(self, name, type_(attr))
 

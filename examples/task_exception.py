@@ -1,8 +1,10 @@
-from gromozeka import task, Gromozeka, Retry, BrokerPointType
+import time
+
+from gromozeka import task, Gromozeka, Retry, BrokerPoint
 
 
 # task with exception
-@task(bind=True, max_retries=10, retry_countdown=5)
+@task(bind=True, max_retries=3, retry_countdown=5)
 def test_func_bad(self):
     """
 
@@ -17,11 +19,12 @@ def test_func_bad(self):
 
 
 if __name__ == '__main__':
-    app = Gromozeka()
-    broker_point = BrokerPointType(exchange='first_exchange', exchange_type='direct', queue='first_queue',
-                                   routing_key='first')
+    app = Gromozeka().config_from_env()
+    broker_point = BrokerPoint(exchange='first_exchange', exchange_type='direct', queue='first_queue',
+                                    routing_key='first')
 
-    app.register_task(task=test_func_bad(), broker_point=broker_point)
+    app.register(task=test_func_bad(), broker_point=broker_point)
     # Start application
     app.start()
+    time.sleep(2)
     test_func_bad().apply_async()

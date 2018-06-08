@@ -4,7 +4,7 @@ How to retry task
 To retry task on exception or when some condition occurred, we can use ``raise Retry(e)``:
 
 .. literalinclude:: ../../../examples/task_exception.py
-    :lines: 4-16
+    :lines: 6-18
 
 We can redefine behavior in task:
 

@@ -9,19 +9,19 @@ Define tasks from functions, using decorator `@task`:
 Define application:
 
 .. literalinclude:: ../../../examples/task.py
-    :lines: 37
+    :lines: 38
     :dedent: 4
 
 Define `RabbitMQ` queues:
 
 .. literalinclude:: ../../../examples/task.py
-    :lines: 39-42
+    :lines: 40-43
     :dedent: 4
 
 Register tasks in application:
 
 .. literalinclude:: ../../../examples/task.py
-    :lines: 44-49
+    :lines: 45-50
     :dedent: 4
 
 Or task can register self:
@@ -34,13 +34,13 @@ Or task can register self:
 You can start application now:
 
 .. literalinclude:: ../../../examples/task.py
-    :lines: 52
+    :lines: 53
     :dedent: 4
 
 Add 10 tasks for each queue:
 
 .. literalinclude:: ../../../examples/task.py
-    :lines: 54-
+    :lines: 55-
     :dedent: 4
 
 

@@ -48,9 +48,11 @@ Or you can configure with dictionary. This must be run after application configu
             'gromozeka': {'handlers': ['console'], 'level': 'INFO'},
             'gromozeka.pool': {},
             'gromozeka.pool.worker': {},
+            'gromozeka.pool.worker.*': {},
             'gromozeka.scheduler': {},
             'gromozeka.broker': {},
             'gromozeka.broker.consumer': {},
+            'gromozeka.broker.consumer.*': {},
         }
     }
 

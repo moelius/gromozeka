@@ -7,6 +7,10 @@ class GromozekaException(Exception):
     pass
 
 
+class SerializationError(GromozekaException):
+    pass
+
+
 class Retry(GromozekaException):
     """Exception for retry.
 
@@ -59,4 +63,8 @@ class MaxRetriesExceedException(GromozekaException):
     pass
 
 
-__all__ = ['GromozekaException', 'Retry', 'MaxRetriesExceedException']
+class BackendException(GromozekaException):
+    pass
+
+
+__all__ = ['GromozekaException', 'Retry', 'MaxRetriesExceedException', 'BackendException', 'SerializationError']

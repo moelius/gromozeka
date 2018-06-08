@@ -4,10 +4,19 @@ Gromozeka
 
 Gromozeka is distributed task queue, based on RabbitMQ.
 
+[![Documentation Status](https://readthedocs.org/projects/gromozeka/badge/?version=latest)](http://gromozeka.readthedocs.io/en/latest/?badge=latest)
+
 Features
 --------
 
-- RabbitMQ as broker
+- Brokers:
+
+ - RabbitMQ
+
+- Result backends:
+
+ - Redis
+
 - simple definition of a task as a normal function.
 - ability to retry on error (max_retries and retry_countdown options).
 - ability to bind task as self option to worker function.
@@ -16,7 +25,7 @@ Features
 TODO's
 ------
 - [ ] Tests
-- [ ] Workflows (need's result backend)
+- [x] Workflows (need's result backend_adapter)
 
 Installation
 ------------

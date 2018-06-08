@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package custom_task;
+
+message Word {
+    string word = 1;
+}
+
+message Task {
+    string task_id = 2;
+    Word word = 3;
+}
