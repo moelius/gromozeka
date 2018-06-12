@@ -19,7 +19,7 @@ def test_func_one(self, word):
 
 
 if __name__ == '__main__':
-    app = Gromozeka()
+    app = Gromozeka().config_from_env()
 
     broker_point = BrokerPoint(exchange='first_exchange', exchange_type='direct', queue='first_queue',
                                routing_key='first')

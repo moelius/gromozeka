@@ -42,7 +42,7 @@ if __name__ == '__main__':
 
 
     message = Task(task_id='__main__.test_func_one', word=Word(word='hello'))
-    app = Gromozeka()
+    app = Gromozeka().config_from_env()
     broker_point = BrokerPoint(exchange='first_exchange', exchange_type='direct', queue='first_queue',
                                routing_key='first')
 

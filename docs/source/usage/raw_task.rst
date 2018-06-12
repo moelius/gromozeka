@@ -24,7 +24,7 @@ Then make protobuf message:
 You can use custom proto files with custom deserealization:
 
 .. literalinclude:: ../../../examples/raw_task_custom_proto.py
-    :lines: 37-59
+    :lines: 35-
     :dedent: 4
 
 See `primitives.task.proto` for more information
