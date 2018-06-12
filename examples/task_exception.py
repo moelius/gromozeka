@@ -21,7 +21,7 @@ def test_func_bad(self):
 if __name__ == '__main__':
     app = Gromozeka().config_from_env()
     broker_point = BrokerPoint(exchange='first_exchange', exchange_type='direct', queue='first_queue',
-                                    routing_key='first')
+                               routing_key='first')
 
     app.register(task=test_func_bad(), broker_point=broker_point)
     # Start application

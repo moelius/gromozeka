@@ -147,7 +147,7 @@ class BrokerAdapter(Pool):
                 self.broker.task_register(task_id=args['task_id'], broker_point=args['broker_point'],
                                           options=args['options'], deserializator=args['deserializator'])
             elif command == commands.BROKER_TASK_SEND:
-                self.broker.task_send(args['request'], args['broker_point'],args['reply_to'])
+                self.broker.task_send(args['request'], args['broker_point'], args['reply_to'])
             elif command == commands.BROKER_TASK_SEND_DELAYED:
                 self.broker.task_send_delayed(args['request'], args['broker_point'], args['delay'])
             elif command == commands.BROKER_TASK_DONE:

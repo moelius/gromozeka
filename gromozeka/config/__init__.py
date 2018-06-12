@@ -41,6 +41,7 @@ class Config:
         backend_url(:obj:`str`): Backend url. Default: 'redis://localhost'
         backend_reconnect_max_retries(:obj:`int`): Backend reconnect attempts. Default: 10
         backend_reconnect_retry_countdown(:obj:`int`): Sleep time between reconnects (seconds). Default: 10
+        backend_results_timelife(:obj:`int`): Results expiration time life (seconds). Default: 3600
     """
 
     def __init__(self):
@@ -51,6 +52,7 @@ class Config:
         self.backend_url = 'redis://localhost'
         self.backend_reconnect_max_retries = 10
         self.backend_reconnect_retry_countdown = 10
+        self.backend_results_timelife = 3600
         config.dictConfig(LOGGING)
 
     def from_env(self):
