@@ -1,4 +1,3 @@
 -r ./base.txt
 
-protobuf==3.5.2.post1
 grpcio-tools==1.12.1
