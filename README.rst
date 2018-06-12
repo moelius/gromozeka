@@ -5,8 +5,8 @@ Gromozeka
 Gromozeka is distributed task queue, based on RabbitMQ.
 
 .. image:: https://readthedocs.org/projects/gromozeka/badge/?version=latest
-:target: https://gromozeka.readthedocs.io/en/latest/?badge=latest
-:alt: Documentation Status
+    :target: https://gromozeka.readthedocs.io/en/latest/?badge=latest
+    :alt: Documentation Status
 
 Features
 --------
