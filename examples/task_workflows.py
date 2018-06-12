@@ -37,7 +37,7 @@ def get_something_from_api(self, api_name):
 
 
 if __name__ == '__main__':
-    app = Gromozeka()
+    app = Gromozeka().config_from_env()
     workflow_broker_point = BrokerPoint(exchange='workflow', exchange_type='direct', queue='workflow',
                                         routing_key='workflow')
     broker_point_first = BrokerPoint(exchange='print', exchange_type='direct', queue='print',

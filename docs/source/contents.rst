@@ -12,6 +12,7 @@ This part of the documentation shows, how you can use Gromozeka.
    usage/raw_task
    usage/task_retry.rst
    usage/task_workflows.rst
+   usage/workflow_visualization.rst
 
 API Reference
 -------------

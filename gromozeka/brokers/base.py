@@ -31,7 +31,7 @@ class BrokerInterface:
         Args:
             app(gromozeka.Gromozeka):
         """
-        self.logger = logging.getLogger("gromozeka.broker")
+        self.logger = logging.getLogger("%s.broker" % app.config.app_id)
         self.app = app
 
     @staticmethod
@@ -59,16 +59,17 @@ class BrokerInterface:
         Args:
             broker_point(gromozeka.primitives.protocol.ProtoBrokerPoint): Broker entry
             task_id(str): Task identification
-            options: Specific broker options. See NatsOptions broker for example
+            options: Specific broker options.
             deserializator(gromozeka.primitives.base.TaskDeserializator):
 
         """
         raise NotImplementedError
 
-    def task_send(self, request, broker_point, reply_to=None):
+    def task_send(self, task_uuid, request, broker_point, reply_to=None):
         """
 
         Args:
+            task_uuid(str): task identification
             request: serialized request
             broker_point(gromozeka.BrokerPoint):
             reply_to(gromozeka.BrokerPoint):
@@ -76,24 +77,36 @@ class BrokerInterface:
         """
         raise NotImplementedError
 
-    def task_send_delayed(self, request, broker_point, delay):
+    def task_send_delayed(self, task_uuid, request, broker_point, delay):
+        """
+
+        Args:
+            task_uuid(str): task identification
+            request: serialized request
+            broker_point(gromozeka.BrokerPoint):
+            delay:
+
+        Returns:
+
+        """
         raise NotImplementedError
 
     def task_done(self, task_uuid, broker_point, delivery_tag):
         """
 
         Args:
-            task_uuid:
+            task_uuid(str): task identification
             broker_point(gromozeka.primitives.protocol.ProtoBrokerPoint): Broker entry
             delivery_tag: Broker delivery tag (unique message identification)
 
         """
         raise NotImplementedError
 
-    def task_reject(self, broker_point, delivery_tag):
+    def task_reject(self, task_uuid, broker_point, delivery_tag):
         """
 
         Args:
+            task_uuid(str): task identification
             broker_point(gromozeka.primitives.protocol.ProtoBrokerPoint): Broker entry
             delivery_tag: Broker delivery tag (unique message identification)
 
@@ -122,7 +135,7 @@ class BrokerAdapter(Pool):
         Args:
             broker(BrokerInterface):
         """
-        self.logger = logging.getLogger("gromozeka.broker")
+        self.logger = logging.getLogger("%s.broker" % broker.app.config.app_id)
         self.broker = broker
         self.worker = type('BrokerWorker', (ThreadWorker,),
                            {'app': self.broker.app, 'broker': self.broker, 'run': self.broker.worker_run,
@@ -144,17 +157,27 @@ class BrokerAdapter(Pool):
                 self.broker.stop()
                 super().stop_()
             elif command == commands.BROKER_TASK_REGISTER:
-                self.broker.task_register(task_id=args['task_id'], broker_point=args['broker_point'],
-                                          options=args['options'], deserializator=args['deserializator'])
+                task_id, broker_point, options = args['task_id'], args['broker_point'], args['options']
+                deserializator = args['deserializator']
+                self.broker.task_register(task_id=task_id, broker_point=broker_point, options=options,
+                                          deserializator=deserializator)
             elif command == commands.BROKER_TASK_SEND:
-                self.broker.task_send(args['request'], args['broker_point'], args['reply_to'])
+                task_uuid, request = args['task_uuid'], args['request']
+                broker_point, reply_to = args['broker_point'], args['reply_to']
+                self.broker.task_send(task_uuid=task_uuid, request=request, broker_point=broker_point,
+                                      reply_to=reply_to)
             elif command == commands.BROKER_TASK_SEND_DELAYED:
-                self.broker.task_send_delayed(args['request'], args['broker_point'], args['delay'])
+                task_uuid, request = args['task_uuid'], args['request']
+                broker_point, delay = args['broker_point'], args['delay']
+                self.broker.task_send_delayed(task_uuid=task_uuid, request=request, broker_point=broker_point,
+                                              delay=delay)
             elif command == commands.BROKER_TASK_DONE:
                 task_uuid, broker_point, delivery_tag = args['task_uuid'], args['broker_point'], args['delivery_tag']
                 self.broker.task_done(task_uuid=task_uuid, broker_point=broker_point, delivery_tag=delivery_tag)
             elif command == commands.BROKER_TASK_REJECT:
-                self.broker.task_reject(broker_point=args['broker_point'], delivery_tag=args['delivery_tag'])
+                task_uuid, broker_point = args['task_uuid'], args['broker_point']
+                delivery_tag = args['delivery_tag']
+                self.broker.task_reject(task_uuid=task_uuid, broker_point=broker_point, delivery_tag=delivery_tag)
             elif command == commands.BROKER_ON_POOL_SIZE_CHANGED:
                 self.broker.on_pool_size_changed()
 
@@ -174,26 +197,30 @@ class BrokerAdapter(Pool):
         self.cmd.put(commands.broker_task_register(task_id=task_id, broker_point=broker_point, options=options,
                                                    deserializator=deserializator))
 
-    def task_send(self, request, broker_point, reply_to=None):
+    def task_send(self, task_uuid, request, broker_point, reply_to=None):
         """
 
         Args:
+            task_uuid(str): task identification
             request: serialized request
             broker_point(gromozeka.BrokerPoint):
 
         """
-        self.cmd.put(commands.broker_task_send(request=request, broker_point=broker_point, reply_to=reply_to))
+        self.cmd.put(commands.broker_task_send(task_uuid=task_uuid, request=request, broker_point=broker_point,
+                                               reply_to=reply_to))
 
-    def task_send_delayed(self, request, broker_point, delay):
+    def task_send_delayed(self, task_uuid, request, broker_point, delay):
         """
 
         Args:
+            task_uuid(str): task identification
             request(gromozeka.primitives.protocol.Request): Request object
             broker_point:
             delay:
 
         """
-        self.cmd.put(commands.broker_task_send_delayed(request=request, broker_point=broker_point, delay=delay))
+        self.cmd.put(commands.broker_task_send_delayed(task_uuid=task_uuid, request=request, broker_point=broker_point,
+                                                       delay=delay))
 
     def task_done(self, task_uuid, broker_point, delivery_tag):
         """
@@ -205,18 +232,21 @@ class BrokerAdapter(Pool):
 
         """
         self.cmd.put(
-            commands.broker_task_done(task_uuid=task_uuid, broker_point=broker_point, delivery_tag=delivery_tag))
+            commands.broker_task_done(task_uuid=task_uuid, broker_point=broker_point,
+                                      delivery_tag=delivery_tag))
 
-    def task_reject(self, broker_point, delivery_tag):
+    def task_reject(self, task_uuid, broker_point, delivery_tag):
         """
 
 
         Args:
+            task_uuid(str): task identification
             broker_point(gromozeka.primitives.protocol.ProtoBrokerPoint): Broker entry
             delivery_tag: Broker delivery tag (unique message identification)
 
         """
-        self.cmd.put(commands.broker_task_reject(broker_point=broker_point, delivery_tag=delivery_tag))
+        self.cmd.put(
+            commands.broker_task_reject(task_uuid=task_uuid, broker_point=broker_point, delivery_tag=delivery_tag))
 
     def on_pool_size_changed(self):
         """This method will be run, when worker pool size change

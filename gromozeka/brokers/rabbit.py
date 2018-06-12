@@ -91,12 +91,16 @@ class RabbitMQPikaAdaptee(BrokerInterface):
             self._consumers[consumer_id] = consumer
         consumer.add_task(task_id)
 
-    def task_send(self, request, broker_point, reply_to=None):
+    def task_send(self, task_uuid, request, broker_point, reply_to=None):
         consumer = self._consumers[format_consumer_id_from_broker_point(broker_point)]
-        consumer.publish(request, reply_to)
+        if reply_to:
+            exchange, routing_key = reply_to.exchange, reply_to.routing_key
+        else:
+            exchange, routing_key = None, None
+        consumer.publish(task_uuid=task_uuid, request=request, exchange=exchange, routing_key=routing_key)
 
-    def task_send_delayed(self, request, broker_point, delay):
-        publisher = DelayedMessagePublisher(broker_connection=self.connection, request=request,
+    def task_send_delayed(self, task_uuid, request, broker_point, delay):
+        publisher = DelayedMessagePublisher(task_uuid=task_uuid, broker_connection=self.connection, request=request,
                                             original_exchange=broker_point.exchange,
                                             original_routing_key=broker_point.routing_key, delay=delay)
         publisher.publish()
@@ -105,9 +109,9 @@ class RabbitMQPikaAdaptee(BrokerInterface):
         consumer = self._consumers[format_consumer_id_from_broker_point(broker_point)]
         consumer.acknowledge_message(task_uuid, delivery_tag)
 
-    def task_reject(self, broker_point, delivery_tag):
+    def task_reject(self, task_uuid, broker_point, delivery_tag):
         consumer = self._consumers[format_consumer_id_from_broker_point(broker_point)]
-        consumer.reject_message(delivery_tag)
+        consumer.reject_message(task_uuid, delivery_tag)
 
     def on_pool_size_changed(self):
         with self._prefetch_lock:
@@ -265,8 +269,9 @@ class DelayedMessagePublisher:
     exchange = 'delayed'
     exchange_type = 'direct'
 
-    def __init__(self, broker_connection, request, original_exchange, original_routing_key, delay):
+    def __init__(self, task_uuid, broker_connection, request, original_exchange, original_routing_key, delay):
         self.logger = logging.getLogger('gromozeka.broker.consumer.delayed_publisher')
+        self.task_uuid = task_uuid
         self._connection = broker_connection
         self.ttl = delay * 1000
         self.queue = 'delay.%d.%s.%s' % (self.ttl, original_exchange, original_routing_key)
@@ -386,7 +391,7 @@ class DelayedMessagePublisher:
         self.logger.debug('queue bound')
         try:
             self.channel.basic_publish(self.exchange, self.queue, self.request,
-                                       properties=pika.BasicProperties(delivery_mode=2))
+                                       properties=pika.BasicProperties(delivery_mode=2, app_id=APP_ID))
         except PIKA_CHANNEL_EXCEPTIONS:
             self.logger.warning('connection lost on message retry, retry will be ignored')
             return
@@ -441,7 +446,8 @@ class DelayedMessagePublisher:
 class Consumer:
     def __init__(self, exchange, exchange_type, queue, routing_key, deserializator=None):
         consumer_id = "%s.%s.%s.%s" % (exchange, exchange_type, queue, routing_key)
-        self.logger = logging.getLogger('gromozeka.broker.consumer.%s' % consumer_id)
+        self.logger = logging.getLogger(
+            '{}.broker.consumer.{}'.format(gromozeka.app.get_app().config.app_id, consumer_id))
         self.consumer_tag = consumer_id
         self.exchange = exchange
         self.exchange_type = exchange_type
@@ -611,10 +617,11 @@ class Consumer:
         self.prefetch_count = new_size
         self.sema.change(new_size)
 
-    def publish(self, request, exchange=None, routing_key=None):
+    def publish(self, task_uuid, request, exchange=None, routing_key=None):
         """
 
         Args:
+            task_uuid:
             request:
             exchange(str):
             routing_key(str):
@@ -623,11 +630,9 @@ class Consumer:
 
         """
         if exchange and routing_key:
-            exchange = exchange
-            routing_key = routing_key
+            exchange, routing_key = exchange, routing_key
         else:
-            exchange = self.exchange
-            routing_key = self.routing_key
+            exchange, routing_key = self.exchange, self.routing_key
         try:
             self.channel.basic_publish(exchange=exchange, routing_key=routing_key, body=request,
                                        properties=pika.BasicProperties(delivery_mode=2, app_id=APP_ID))
@@ -675,14 +680,15 @@ class Consumer:
             self.sema.release()
         self.logger.info('acknowledged message #%d, task_uuid <%s>', delivery_tag, task_uuid)
 
-    def reject_message(self, delivery_tag, requeue=False):
+    def reject_message(self, task_uuid, delivery_tag, requeue=False):
         """Reject message by it`s delivery tag
 
         Args:
+            task_uuid(str):
             delivery_tag(int):
             requeue(bool): If `True` message will reject with requeue
         """
-        self.logger.info('rejecting message %s', delivery_tag)
+        self.logger.info('rejecting message %s, task_uuid <%s> from gromozeka', delivery_tag, task_uuid)
         try:
             self.channel.basic_reject(delivery_tag, requeue)
         except PIKA_CHANNEL_EXCEPTIONS:

@@ -186,7 +186,7 @@ class Task(Vertex):
         self.app = app or gromozeka.get_app()
         self.uuid = uuid_
         self.task_id = "%s.%s" % (func.__module__, func.__name__)
-        self.logger = logging.getLogger("gromozeka.pool.worker.{}".format(self.task_id))
+        self.logger = logging.getLogger("{}.pool.worker.{}".format(self.app.config.app_id, self.task_id))
         self.state = state or PENDING
         self.func = func
         self.args = args or []
@@ -354,7 +354,8 @@ class Task(Vertex):
         self.broker_point = r_task.broker_point
         self.args = args or self.args
         self.kwargs = kwargs or self.kwargs
-        self.app.broker_adapter.task_send(request=self.request.SerializeToString(), broker_point=self.broker_point)
+        self.app.broker_adapter.task_send(task_uuid=self.uuid, request=self.request.SerializeToString(),
+                                          broker_point=self.broker_point)
 
     def a(self, *args):
         self.args = args
@@ -570,7 +571,7 @@ class Task(Vertex):
         self.logger.warning("retry on error: {0}".format(e))
         self.delay = e.retry_countdown
         self.retries += 1
-        self.app.broker_adapter.task_send_delayed(request=self.request.SerializeToString(),
+        self.app.broker_adapter.task_send_delayed(task_uuid=self.uuid, request=self.request.SerializeToString(),
                                                   broker_point=self.broker_point, delay=self.delay)
         self._reject()
 
@@ -584,7 +585,8 @@ class Task(Vertex):
         return self.app.backend_adapter.result_set(self.uuid, result)
 
     def _reject(self):
-        self.app.broker_adapter.task_reject(broker_point=self.broker_point, delivery_tag=self.delivery_tag)
+        self.app.broker_adapter.task_reject(task_uuid=self.uuid, broker_point=self.broker_point,
+                                            delivery_tag=self.delivery_tag)
 
 
 def to_dict(o):
