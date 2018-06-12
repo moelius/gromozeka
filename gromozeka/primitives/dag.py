@@ -313,7 +313,7 @@ class Vertex:
         if self.kwargs:
             proto_task.kwargs = json.dumps(self.kwargs)
 
-        app.broker_adapter.task_send(request=proto_task.SerializeToString(), broker_point=bp)
+        app.broker_adapter.task_send(task_uuid=self.uuid, request=proto_task.SerializeToString(), broker_point=bp)
 
     def add_edge(self, to):
         """

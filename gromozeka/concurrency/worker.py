@@ -5,6 +5,7 @@ import queue
 import threading
 import traceback
 
+import gromozeka.app
 from gromozeka.exceptions import Retry, MaxRetriesExceedException
 from gromozeka.primitives import Task
 
@@ -25,7 +26,7 @@ class Worker:
     ident = None  # multiprocessing or threading part
 
     def __init__(self, pool):
-        self.logger = logging.getLogger("gromozeka.pool.worker")
+        self.logger = logging.getLogger("%s.pool.worker" % gromozeka.app.get_app().config.app_id)
         self.pool = pool
         self._stop_event = None
 

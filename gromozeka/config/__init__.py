@@ -2,32 +2,36 @@ import logging
 import os
 from logging import config
 
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': True,
-    'formatters': {
-        'console': {
-            'format': '%(asctime)-15s %(levelname)s %(name)s [%(threadName)s %(processName)s] %(message)s'
+
+def get_logging():
+    from gromozeka.app import get_app
+    app_id = get_app().config.app_id
+    return {
+        'version': 1,
+        'disable_existing_loggers': True,
+        'formatters': {
+            'console': {
+                'format': '%(asctime)-15s %(levelname)s %(name)s [%(threadName)s %(processName)s] %(message)s'
+            },
         },
-    },
-    'handlers': {
-        'console': {
-            'level': 'DEBUG',
-            'class': 'logging.StreamHandler',
-            'formatter': 'console'
+        'handlers': {
+            'console': {
+                'level': 'DEBUG',
+                'class': 'logging.StreamHandler',
+                'formatter': 'console'
+            },
         },
-    },
-    'loggers': {
-        'gromozeka': {'handlers': ['console'], 'level': 'INFO'},
-        'gromozeka.pool': {},
-        'gromozeka.pool.worker': {},
-        'gromozeka.pool.worker.*': {},
-        'gromozeka.scheduler': {},
-        'gromozeka.broker': {},
-        'gromozeka.broker.consumer': {},
-        'gromozeka.broker.consumer.*': {},
+        'loggers': {
+            '%s' % app_id: {'handlers': ['console'], 'level': 'INFO'},
+            '%s.pool' % app_id: {},
+            '%s.pool.worker' % app_id: {},
+            '%s.pool.worker.*' % app_id: {},
+            '%s.scheduler' % app_id: {},
+            '%s.broker' % app_id: {},
+            '%s.broker.consumer' % app_id: {},
+            '%s.broker.consumer.*' % app_id: {},
+        }
     }
-}
 
 
 class Config:
@@ -46,6 +50,7 @@ class Config:
 
     def __init__(self):
         self.debug = False
+        self.app_id = 'gromozeka'
         self.broker_url = 'amqp://guest:guest@localhost:5672/%2F'
         self.broker_reconnect_max_retries = 10
         self.broker_reconnect_retry_countdown = 10
@@ -53,7 +58,6 @@ class Config:
         self.backend_reconnect_max_retries = 10
         self.backend_reconnect_retry_countdown = 10
         self.backend_results_timelife = 3600
-        config.dictConfig(LOGGING)
 
     def from_env(self):
         """Configure Gromozeka with environment variables
@@ -68,9 +72,7 @@ class Config:
             new_attr = os.getenv(name, getattr(self, name))
             type_ = type(getattr(self, name))
             self._set_var_type(type_, name, new_attr)
-        if self.debug:
-            logging.getLogger('gromozeka').setLevel(logging.DEBUG)
-
+        self._set_up_logging()
         return self
 
     def from_dict(self, config_dict):
@@ -88,10 +90,13 @@ class Config:
                 raise GromozekaException('Unknown config option `{}`'.format(name))
             type_ = type(getattr(self, name))
             self._set_var_type(type_, name, value)
-        if self.debug:
-            logging.getLogger('gromozeka').setLevel(logging.DEBUG)
-
+        self._set_up_logging()
         return self
+
+    def _set_up_logging(self):
+        config.dictConfig(get_logging())
+        if self.debug:
+            logging.getLogger(self.app_id).setLevel(logging.DEBUG)
 
     def _set_var_type(self, type_, name, attr):
         if type(None) == type_:

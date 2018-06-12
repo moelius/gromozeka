@@ -35,7 +35,7 @@ def test_func_second(self, sleep_time, word):
 
 
 if __name__ == '__main__':
-    app = Gromozeka()
+    app = Gromozeka().config_from_env()
 
     broker_point_first = BrokerPoint(exchange='first_exchange', exchange_type='direct', queue='first_queue',
                                      routing_key='first')

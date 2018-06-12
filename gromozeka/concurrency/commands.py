@@ -120,10 +120,11 @@ def broker_task_register(task_id, broker_point, options, deserializator):
                          'deserializator': deserializator}).as_tuple()
 
 
-def broker_task_send(request, broker_point, reply_to=None):
+def broker_task_send(task_uuid, request, broker_point, reply_to=None):
     """Command to publish `primitives.Request` to customer
 
     Args:
+        task_uuid(str): task identification
         request: Serialized request
         broker_point(gromozeka.BrokerPoint):
         reply_to(gromozeka.BrokerPoint):
@@ -132,13 +133,15 @@ def broker_task_send(request, broker_point, reply_to=None):
         Command:
     """
     return Command(command=BROKER_TASK_SEND,
-                   args={'request': request, 'broker_point': broker_point, 'reply_to': reply_to}).as_tuple()
+                   args={'task_uuid': task_uuid, 'request': request, 'broker_point': broker_point,
+                         'reply_to': reply_to}).as_tuple()
 
 
-def broker_task_send_delayed(request, broker_point, delay):
+def broker_task_send_delayed(task_uuid, request, broker_point, delay):
     """Command to publish `primitives.Request` to customer
 
     Args:
+        task_uuid(str): task identification
         request(primitives.Request): Request to publish
         broker_point:
         delay:
@@ -147,14 +150,15 @@ def broker_task_send_delayed(request, broker_point, delay):
         Command:
     """
     return Command(command=BROKER_TASK_SEND_DELAYED,
-                   args={'request': request, 'broker_point': broker_point, 'delay': delay}).as_tuple()
+                   args={'task_uuid': task_uuid, 'request': request, 'broker_point': broker_point,
+                         'delay': delay}).as_tuple()
 
 
 def broker_task_done(task_uuid, broker_point, delivery_tag):
     """Command to acknowledge task message by it's broker_adapter point, delivery_tag or scheduler_tag
 
     Args:
-        task_uuid:
+        task_uuid(str): task identification
         broker_point(primitives.BrokerPointType): Broker entry
         delivery_tag(int): Task delivery tag
     Returns:
@@ -164,10 +168,11 @@ def broker_task_done(task_uuid, broker_point, delivery_tag):
                    args={'task_uuid': task_uuid, 'broker_point': broker_point, 'delivery_tag': delivery_tag}).as_tuple()
 
 
-def broker_task_reject(broker_point, delivery_tag):
+def broker_task_reject(task_uuid, broker_point, delivery_tag):
     """Command to reject task message by it's broker_adapter point, delivery_tag or scheduler_tag
 
     Args:
+        task_uuid(str): task identification
         broker_point(primitives.BrokerPointType): Broker entry
         delivery_tag(int): Task delivery tag
 
@@ -175,7 +180,7 @@ def broker_task_reject(broker_point, delivery_tag):
         Command:
     """
     return Command(command=BROKER_TASK_REJECT,
-                   args={'broker_point': broker_point, 'delivery_tag': delivery_tag}).as_tuple()
+                   args={'task_uuid': task_uuid, 'broker_point': broker_point, 'delivery_tag': delivery_tag}).as_tuple()
 
 
 def broker_on_pool_size_changed():

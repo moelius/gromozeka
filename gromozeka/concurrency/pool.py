@@ -30,7 +30,7 @@ class Pool(threading.Thread):
                  'is_on_stop']
 
     def __init__(self, max_workers=1, worker_class=ThreadWorker, logger=None):
-        self.logger = logger or logging.getLogger("gromozeka.pool")
+        self.logger = logger or logging.getLogger("%s.pool" % gromozeka.app.get_app().config.app_id)
         self.init_max_workers = max_workers
         self.worker_cls = worker_class
         self.worker_queue = multiprocessing.Queue() if issubclass(self.worker_cls, ProcessWorker) else queue.Queue()
