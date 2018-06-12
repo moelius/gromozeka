@@ -175,9 +175,12 @@ class RedisAioredisAdaptee(BackendInterface):
 
     @async_error_handler
     async def _result_set(self, task_uuid, result, graph_uuid=None):
-        return await self._connection.set(
-            TASK_RESULT_PATTERN.format(task_uuid=task_uuid) if not graph_uuid else GRAPH_TASK_PATTERN.format(
-                graph_uuid=graph_uuid, task_uuid=task_uuid), json.dumps(result))
+        task_key = TASK_RESULT_PATTERN.format(task_uuid=task_uuid) if not graph_uuid else GRAPH_TASK_PATTERN.format(
+            graph_uuid=graph_uuid, task_uuid=task_uuid)
+        pipe = self._connection.pipeline()
+        pipe.set(task_key, json.dumps(result))
+        pipe.expire(task_key, self.app.config.backend_results_timelife)
+        return await pipe.execute()
 
     @async_error_handler
     async def _result_del(self, task_uuid):
@@ -199,7 +202,11 @@ class RedisAioredisAdaptee(BackendInterface):
         }
         for k, v in graph_dict['verticies'].items():
             graph_hash[k] = json.dumps(v)
-        await self._connection.hmset_dict(GRAPH_META_PATTERN.format(graph_uuid=graph_dict['uuid']), graph_hash)
+        graph_ident = GRAPH_META_PATTERN.format(graph_uuid=graph_dict['uuid'])
+        pipe = self._connection.pipeline()
+        pipe.hmset_dict(graph_ident, graph_hash)
+        pipe.expire(graph_ident, self.app.config.backend_results_timelife)
+        return await pipe.execute()
 
     @async_error_handler
     async def _graph_get(self, graph_uuid):
@@ -230,11 +237,14 @@ class RedisAioredisAdaptee(BackendInterface):
     @async_error_handler
     async def _group_add_result(self, graph_uuid, group_uuid, task_uuid, result):
         with RedLock('%s_%s' % (graph_uuid, group_uuid), connection_details=[{'url': self._url}]):
+            uuids_key = GRAPH_TASK_GROUP_UUIDS_PATTERN.format(graph_uuid=graph_uuid, group_uuid=group_uuid)
+            results_key = GRAPH_TASK_GROUP_RESULT_PATTERN.format(graph_uuid=graph_uuid, group_uuid=group_uuid)
             pipe = self._connection.pipeline()
-            pipe.rpush(GRAPH_TASK_GROUP_UUIDS_PATTERN.format(graph_uuid=graph_uuid, group_uuid=group_uuid), task_uuid)
-            pipe.rpush(GRAPH_TASK_GROUP_RESULT_PATTERN.format(graph_uuid=graph_uuid, group_uuid=group_uuid),
-                       json.dumps(result))
-            group_len = pipe.llen(GRAPH_TASK_GROUP_UUIDS_PATTERN.format(graph_uuid=graph_uuid, group_uuid=group_uuid))
+            pipe.rpush(uuids_key, task_uuid)
+            pipe.rpush(results_key, json.dumps(result))
+            pipe.expire(uuids_key, self.app.config.backend_results_timelife)
+            pipe.expire(results_key, self.app.config.backend_results_timelife)
+            group_len = pipe.llen(uuids_key)
             await pipe.execute()
             return await group_len
 

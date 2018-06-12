@@ -1,8 +1,8 @@
 import io
+import os
 import re
 from os.path import join, dirname
 
-from pip._internal.req import parse_requirements
 from setuptools import setup, find_packages
 
 PACKAGE = "gromozeka"
@@ -15,6 +15,28 @@ URL = "https://github.com/moelius/gromozeka"
 with io.open('gromozeka/__init__.py', 'rt', encoding='utf8') as f:
     version = re.search(r'__version__ = \'(.*?)\'', f.read()).group(1)
 
+
+def _strip_comments(l):
+    return l.split('#', 1)[0].strip()
+
+
+def _pip_requirement(req):
+    if req.startswith('-r '):
+        _, path = req.split()
+        return requirements_list(*path.split('/'))
+    return [req]
+
+
+def _requirements_list(*files):
+    return [
+        _pip_requirement(r) for r in
+        (_strip_comments(l) for l in open(os.path.join(os.getcwd(), 'requirements', *files)).readlines()) if r]
+
+
+def requirements_list(*files):
+    return [req for sub in _requirements_list(*files) for req in sub]
+
+
 setup(
     name=NAME,
     version=version,
@@ -26,9 +48,10 @@ setup(
     license="MIT",
     url=URL,
     packages=find_packages(exclude=["tests.*", "tests"]),
-    install_requires=[str(ir.req) for ir in parse_requirements('requirements.txt', session='session')],
+    install_requires=requirements_list('base.txt'),
     extras_require={
-        'docs': [str(ir.req) for ir in parse_requirements('requirements/docs.txt', session='session')],
+        'docs': requirements_list('docs.txt'),
+        'visual': requirements_list('visual.txt'),
     },
     zip_safe=False,
 )

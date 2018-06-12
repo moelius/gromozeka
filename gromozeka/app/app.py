@@ -136,7 +136,8 @@ class Gromozeka:
             self.registry[task.task_id] = task
         else:
             task.register(broker_point=broker_point, worker_class=worker_class, max_workers=max_workers,
-                          max_retries=max_retries, retry_countdown=retry_countdown, ignore_result=ignore_result,
+                          max_retries=max_retries, retry_countdown=retry_countdown,
+                          ignore_result=task.ignore_result or ignore_result,
                           broker_options=broker_options, deserializator=deserializator)
 
     def get_task(self, id_):

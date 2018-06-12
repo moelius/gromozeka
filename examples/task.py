@@ -1,8 +1,8 @@
 import time
 
+from gromozeka import BrokerPoint, task
 # first example function
 from gromozeka import Gromozeka, ThreadWorker, ProcessWorker
-from gromozeka import BrokerPoint, task
 
 
 @task(bind=True)

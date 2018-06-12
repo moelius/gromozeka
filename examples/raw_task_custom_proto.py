@@ -1,9 +1,7 @@
-import json
-
 import pika
 
-from gromozeka import Gromozeka, task, BrokerPoint, TaskDeserializator
 from examples.custom_task_pb2 import Word, Task
+from gromozeka import Gromozeka, task, BrokerPoint, TaskDeserializator
 
 
 # first example function
