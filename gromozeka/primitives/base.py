@@ -425,17 +425,23 @@ class Task(Vertex):
 
         """
         if self.state == CANCELED:
+            self._reject()
             return
+
         self.state = SUCCESS
         self.retries = 0
+
         # result save
         if not self.graph_uuid:
-            self.app.backend_adapter.result_set(self.uuid, res)
+            if not self.ignore_result:
+                self.app.backend_adapter.result_set(self.uuid, res)
             self._ack()
             return
-        self.app.backend_adapter.result_set(self.uuid, res, graph_uuid=self.graph_uuid)
-        graph_dict = self.app.backend_adapter.graph_get(self.graph_uuid)
 
+        if not self.ignore_result:
+            self.app.backend_adapter.result_set(self.uuid, res, graph_uuid=self.graph_uuid)
+
+        graph_dict = self.app.backend_adapter.graph_get(self.graph_uuid)
         graph = Graph.from_dict(graph_dict)
         current = graph.vertex_by_uuid(self.uuid)
         current.state = self.state
@@ -493,7 +499,7 @@ class Task(Vertex):
                     graph_uuid=graph.uuid,
                     group_uuid=current.uuid,
                     task_uuid=vertex.uuid,
-                    result=result)
+                    result=result if not self.ignore_result else None)
                 if group_len != len(current.children):
                     stack.pop()
                     continue
