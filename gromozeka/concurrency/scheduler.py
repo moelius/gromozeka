@@ -8,6 +8,7 @@ import threading
 
 import time
 from datetime import datetime, timedelta
+import gromozeka.app
 
 
 class Scheduler(threading.Thread):
@@ -23,7 +24,7 @@ class Scheduler(threading.Thread):
     __slots__ = ['logger', '_shed', '_event_queue', '_stop_event']
 
     def __init__(self):
-        self.logger = logging.getLogger('gromozeka.scheduler')
+        self.logger = logging.getLogger('%s.scheduler' % gromozeka.app.get_app().config.app_id)
         self._shed = sched.scheduler(time.time, time.sleep)
         self._event_queue = queue.Queue()
         self._stop_event = threading.Event()
