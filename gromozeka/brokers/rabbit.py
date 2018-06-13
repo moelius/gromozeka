@@ -270,7 +270,7 @@ class DelayedMessagePublisher:
     exchange_type = 'direct'
 
     def __init__(self, task_uuid, broker_connection, request, original_exchange, original_routing_key, delay):
-        self.logger = logging.getLogger('gromozeka.broker.consumer.delayed_publisher')
+        self.logger = logging.getLogger('%s.broker.consumer.delayed_publisher' % gromozeka.app.get_app().config.app_id)
         self.task_uuid = task_uuid
         self._connection = broker_connection
         self.ttl = delay * 1000
