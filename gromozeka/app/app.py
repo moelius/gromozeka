@@ -44,7 +44,7 @@ class Gromozeka:
         global app
         app = self
         self.config = Config()
-        self.logger = logging.getLogger('gromozeka')
+        self.logger = logging.getLogger('%s' % app.config.app_id)
         self._broker_adapter = None
         self._backend_adapter = None
         self._scheduler = None

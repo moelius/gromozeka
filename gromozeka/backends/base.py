@@ -31,7 +31,7 @@ class BackendInterface:
         Args:
             app(gromozeka.Gromozeka):
         """
-        self.logger = logging.getLogger("gromozeka.backend")
+        self.logger = logging.getLogger("%s.backend" % app.config.app_id)
         self.app = app
 
     @staticmethod
@@ -95,7 +95,7 @@ class BackendAdapter(Pool):
             backend (gromozeka.backends.redis.RedisAioredisAdaptee):
             logger (logging.Logger):
         """
-        self.logger = logger or logging.getLogger("gromozeka.backend")
+        self.logger = logger or logging.getLogger("%s.backend" % backend.app.config.app_id)
         self.backend = backend
         self.worker = type('BackendWorker', (ThreadWorker,),
                            {'app': self.backend.app, 'backend': self.backend, 'run': self.backend.worker_run,
